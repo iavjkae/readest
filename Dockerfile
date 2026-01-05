@@ -1,5 +1,11 @@
 FROM node:22-slim
 
+# Build-time public env vars used by Next.js.
+# These must be provided during `docker build` (e.g. via docker-compose build args)
+# so they get baked into the client bundle.
+ARG NEXT_PUBLIC_TRAILBASE_URL
+ENV NEXT_PUBLIC_TRAILBASE_URL=${NEXT_PUBLIC_TRAILBASE_URL}
+
 ENV PNPM_HOME="/root/.local/share/pnpm"
 ENV PATH="${PATH}:${PNPM_HOME}"
 

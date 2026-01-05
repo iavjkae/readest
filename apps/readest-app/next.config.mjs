@@ -10,12 +10,13 @@ if (isDev) {
 }
 
 const exportOutput = appPlatform !== 'web' && !isDev;
+const standaloneOutput = appPlatform === 'web' && !isDev;
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   // Ensure Next.js uses SSG instead of SSR
   // https://nextjs.org/docs/pages/building-your-application/deploying/static-exports
-  output: exportOutput ? 'export' : undefined,
+  output: exportOutput ? 'export' : standaloneOutput ? 'standalone' : undefined,
   pageExtensions: exportOutput ? ['jsx', 'tsx'] : ['js', 'jsx', 'ts', 'tsx'],
   // Note: This feature is required to use the Next.js Image component in SSG mode.
   // See https://nextjs.org/docs/messages/export-image-api for different workarounds.

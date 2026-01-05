@@ -172,6 +172,42 @@ pnpm dev-web
 pnpm preview
 ```
 
+### Backend (Trailbase)
+
+Readest uses Trailbase as its backend for auth, sync, and records APIs.
+
+Key environment variables:
+
+- `NEXT_PUBLIC_TRAILBASE_URL`: Public Trailbase base URL used by browser code.
+- `TRAILBASE_URL`: Server-side Trailbase base URL used by Next.js server runtime.
+  - When running in Docker Compose, this should point to the `trailbase` service (e.g. `http://trailbase:4000`).
+  - When running locally without containers, you can typically omit this and only set `NEXT_PUBLIC_TRAILBASE_URL`.
+- `TRAILBASE_JWT_PUBLIC_KEY_PEM`: (recommended for production) Ed25519 public key in SPKI PEM format.
+- `TRAILBASE_ALLOW_UNVERIFIED_JWT`: Dev-only escape hatch. When `true`, the server will decode JWTs without signature verification.
+- `TRAILBASE_SERVICE_TOKEN`: Server-side token used for backend writes that are not associated with a user session (e.g. Stripe webhook).
+
+### Quick Deploy (Docker Compose)
+
+This brings up:
+
+- Trailbase on `http://localhost:4000`
+- Readest Web on `http://localhost:3000`
+
+```bash
+docker compose up --build
+```
+
+The compose file builds the Web app using the optimized multi-stage release image defined in `Dockerfile.release`.
+The final runtime image only contains the Next.js standalone output and minimal Node.js runtime dependencies.
+
+On first start, Trailbase will bootstrap a `traildepot` and print the admin credentials in its logs.
+Open `http://localhost:4000/_/admin/` and sign in with those credentials.
+
+Notes:
+
+- The included compose file enables `TRAILBASE_ALLOW_UNVERIFIED_JWT=true` for convenience. For production deployments, set `TRAILBASE_JWT_PUBLIC_KEY_PEM` and keep verification enabled.
+- If you enable Stripe webhook handling, set `TRAILBASE_SERVICE_TOKEN` to a Trailbase token that has permission to write the required records.
+
 For Android:
 
 ```bash

@@ -1,0 +1,56 @@
+# syntax=docker/dockerfile:1
+
+# Release image for the Web app (Trailbase backend).
+# - build stage contains toolchain
+# - runtime stage contains only the built server + minimal deps
+
+FROM node:22-slim AS deps
+
+ENV PNPM_HOME="/root/.local/share/pnpm"
+ENV PATH="${PATH}:${PNPM_HOME}"
+
+RUN npm install --global pnpm
+
+WORKDIR /app
+
+# Install dependencies (workspace)
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/readest-app/package.json apps/readest-app/package.json
+COPY packages/foliate-js/package.json packages/foliate-js/package.json
+COPY packages/simplecc-wasm/package.json packages/simplecc-wasm/package.json
+
+RUN pnpm install --frozen-lockfile
+
+FROM deps AS build
+
+# Build-time public env var used by browser code.
+ARG NEXT_PUBLIC_TRAILBASE_URL
+ENV NEXT_PUBLIC_TRAILBASE_URL=${NEXT_PUBLIC_TRAILBASE_URL}
+
+WORKDIR /app
+COPY . .
+
+# Prepare static vendor assets required at runtime.
+RUN pnpm --filter @readest/readest-app setup-vendors
+
+# Build Web (uses apps/readest-app/.env.web -> NEXT_PUBLIC_APP_PLATFORM=web)
+RUN pnpm --filter @readest/readest-app build-web
+
+FROM node:22-slim AS runtime
+
+ENV NODE_ENV=production
+ENV PORT=3000
+ENV HOSTNAME=0.0.0.0
+
+WORKDIR /app
+
+# Next.js standalone output
+COPY --from=build /app/apps/readest-app/.next/standalone ./
+COPY --from=build /app/apps/readest-app/.next/static ./apps/readest-app/.next/static
+COPY --from=build /app/apps/readest-app/public ./apps/readest-app/public
+
+EXPOSE 3000
+
+WORKDIR /app/apps/readest-app
+
+CMD ["node", "server.js"]
