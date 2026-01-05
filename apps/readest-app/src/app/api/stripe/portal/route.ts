@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getStripe } from '@/libs/payment/stripe/server';
 import { validateUserAndToken } from '@/utils/access';
-import { createSupabaseAdminClient } from '@/utils/supabase';
+import { trailbaseRecords } from '@/services/backend/trailbaseRecords';
 
 export async function POST(request: NextRequest) {
   const { user, token } = await validateUserAndToken(request.headers.get('authorization'));
@@ -10,12 +10,11 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const supabase = createSupabaseAdminClient();
-    const { data: customerData } = await supabase
-      .from('customers')
-      .select('stripe_customer_id')
-      .eq('user_id', user.id)
-      .single();
+    const customerParams = new URLSearchParams();
+    customerParams.set('limit', '1');
+    customerParams.set('filter[user_id]', user.id);
+    const customerRes = await trailbaseRecords.list<any>('customers', customerParams, token);
+    const customerData = customerRes.records[0];
 
     if (!customerData?.stripe_customer_id) {
       throw new Error('Customer not found');

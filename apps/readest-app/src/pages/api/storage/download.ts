@@ -1,8 +1,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createSupabaseAdminClient } from '@/utils/supabase';
 import { corsAllMethods, runMiddleware } from '@/utils/cors';
 import { getDownloadSignedUrl } from '@/utils/object';
 import { validateUserAndToken } from '@/utils/access';
+import { trailbaseRecords } from '@/services/backend/trailbaseRecords';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   await runMiddleware(req, res, corsAllMethods);
@@ -34,7 +34,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ error: 'Missing or invalid fileKey' });
       }
 
-      const downloadUrlsMap = await processFileKeys([fileKey], user.id);
+      const downloadUrlsMap = await processFileKeys([fileKey], user.id, token);
       const downloadUrl = downloadUrlsMap[fileKey];
 
       if (!downloadUrl) {
@@ -59,7 +59,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         return res.status(400).json({ error: 'All fileKeys must be strings' });
       }
 
-      const downloadUrls = await processFileKeys(fileKeys, user.id);
+      const downloadUrls = await processFileKeys(fileKeys, user.id, token);
 
       return res.status(200).json({ downloadUrls });
     }
@@ -72,22 +72,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 async function processFileKeys(
   fileKeys: string[],
   userId: string,
+  token: string,
 ): Promise<Record<string, string | undefined>> {
-  const supabase = createSupabaseAdminClient();
+  // Resolve records individually (Trailbase query params don't support IN()).
+  const fileRecordMap = new Map<string, { user_id: string; file_key: string; book_hash: string | null }>();
 
-  const { data: fileRecords, error: fileError } = await supabase
-    .from('files')
-    .select('user_id, file_key, book_hash')
-    .eq('user_id', userId)
-    .in('file_key', fileKeys)
-    .is('deleted_at', null);
+  for (const fileKey of fileKeys) {
+    const params = new URLSearchParams();
+    params.set('limit', '1');
+    params.set('filter[user_id]', userId);
+    params.set('filter[file_key]', fileKey);
+    params.set('filter[deleted_at][$is]', 'NULL');
 
-  if (fileError) {
-    console.error('Error querying files:', fileError);
-    return Object.fromEntries(fileKeys.map((key) => [key, undefined]));
+    try {
+      const res = await trailbaseRecords.list<any>('files', params, token);
+      const rec = res.records[0];
+      if (rec) {
+        fileRecordMap.set(fileKey, {
+          user_id: rec.user_id,
+          file_key: rec.file_key,
+          book_hash: rec.book_hash ?? null,
+        });
+      }
+    } catch (err) {
+      console.error('Error querying files:', err);
+    }
   }
-
-  const fileRecordMap = new Map((fileRecords || []).map((record) => [record.file_key, record]));
 
   const missingFileKeys = fileKeys.filter((key) => !fileRecordMap.has(key));
 
@@ -109,14 +119,17 @@ async function processFileKeys(
     if (fallbackCandidates.length > 0) {
       const bookHashes = [...new Set(fallbackCandidates.map((c) => c.bookHash))];
 
-      const { data: fallbackRecords, error: fallbackError } = await supabase
-        .from('files')
-        .select('user_id, file_key, book_hash')
-        .eq('user_id', userId)
-        .in('book_hash', bookHashes)
-        .is('deleted_at', null);
+      // Fetch candidates by book_hash via a regex OR.
+      const re = `^(${bookHashes.join('|')})$`;
+      const fallbackParams = new URLSearchParams();
+      fallbackParams.set('limit', '1024');
+      fallbackParams.set('filter[user_id]', userId);
+      fallbackParams.set('filter[deleted_at][$is]', 'NULL');
+      fallbackParams.set('filter[book_hash][$re]', re);
 
-      if (!fallbackError && fallbackRecords) {
+      try {
+        const fallbackRes = await trailbaseRecords.list<any>('files', fallbackParams, token);
+        const fallbackRecords = fallbackRes.records || [];
         for (const candidate of fallbackCandidates) {
           const matchedFile = fallbackRecords.find(
             (f) =>
@@ -127,6 +140,8 @@ async function processFileKeys(
             fileRecordMap.set(candidate.originalKey, matchedFile);
           }
         }
+      } catch (err) {
+        console.warn('Fallback file lookup failed:', err);
       }
     }
   }

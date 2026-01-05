@@ -4,12 +4,11 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { useThemeStore } from '@/store/themeStore';
 import { useTranslation } from '@/hooks/useTranslation';
-import { supabase } from '@/utils/supabase';
 
 export default function UpdateEmailPage() {
   const _ = useTranslation();
   const router = useRouter();
-  const { user } = useAuth();
+  const { user, token } = useAuth();
   const { isDarkMode } = useThemeStore();
 
   const [email, setEmail] = useState('');
@@ -30,11 +29,23 @@ export default function UpdateEmailPage() {
     setError('');
 
     try {
-      const { error: updateError } = await supabase.auth.updateUser({
-        email: email,
+      if (!token) {
+        throw new Error(_('Not authenticated'));
+      }
+
+      const res = await fetch('/api/trailbase/auth/user', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ email }),
       });
 
-      if (updateError) throw updateError;
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(text || _('Failed to update email'));
+      }
 
       setMessage(
         _(

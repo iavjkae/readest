@@ -1,14 +1,20 @@
 'use client';
 
 import React, { createContext, useState, useContext, ReactNode, useEffect } from 'react';
-import { User } from '@supabase/supabase-js';
-import { supabase } from '@/utils/supabase';
 import posthog from 'posthog-js';
+import { getAuthBackend } from '@/services/backend';
+import type { AuthSession, AuthUser } from '@/services/backend/types';
+
+export type AppUser = AuthUser;
 
 interface AuthContextType {
   token: string | null;
-  user: User | null;
-  login: (token: string, user: User) => void;
+  user: AppUser | null;
+  login: (
+    token: string,
+    user: AppUser,
+    options?: { refreshToken?: string; csrfToken?: string },
+  ) => void;
   logout: () => void;
   refresh: () => void;
 }
@@ -22,7 +28,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
     return null;
   });
-  const [user, setUser] = useState<User | null>(() => {
+  const [user, setUser] = useState<AppUser | null>(() => {
     if (typeof window !== 'undefined') {
       const userJson = localStorage.getItem('user');
       return userJson ? JSON.parse(userJson) : null;
@@ -31,61 +37,77 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   });
 
   useEffect(() => {
-    const syncSession = (
-      session: { access_token: string; refresh_token: string; user: User } | null,
-    ) => {
+    const authBackend = getAuthBackend();
+
+    const syncSession = (session: AuthSession | null) => {
       if (session) {
-        console.log('Syncing session');
-        const { access_token, refresh_token, user } = session;
-        localStorage.setItem('token', access_token);
-        localStorage.setItem('refresh_token', refresh_token);
+        const { accessToken, refreshToken, csrfToken, user } = session;
+        localStorage.setItem('token', accessToken);
+        if (refreshToken) localStorage.setItem('refresh_token', refreshToken);
+        if (csrfToken) localStorage.setItem('csrf_token', csrfToken);
         localStorage.setItem('user', JSON.stringify(user));
         posthog.identify(user.id);
-        setToken(access_token);
+        setToken(accessToken);
         setUser(user);
-      } else {
-        console.log('Clearing session');
-        localStorage.removeItem('token');
-        localStorage.removeItem('refresh_token');
-        localStorage.removeItem('user');
-        setToken(null);
-        setUser(null);
+        return;
       }
+
+      localStorage.removeItem('token');
+      localStorage.removeItem('refresh_token');
+      localStorage.removeItem('csrf_token');
+      localStorage.removeItem('user');
+      setToken(null);
+      setUser(null);
     };
-    const refreshSession = async () => {
-      try {
-        await supabase.auth.refreshSession();
-      } catch {
+
+    let unsubscribe: (() => void) | undefined;
+
+    authBackend
+      .onAuthStateChange(syncSession)
+      .then((fn) => {
+        unsubscribe = fn;
+      })
+      .catch(() => {
+        // If subscription cannot be established, fall back to local state.
+      });
+
+    authBackend.refreshSession().catch(() => {
+      // Only clear session when we have no access token.
+      if (!localStorage.getItem('token')) {
         syncSession(null);
       }
-    };
-
-    const { data: subscription } = supabase.auth.onAuthStateChange((_, session) => {
-      syncSession(session);
     });
 
-    refreshSession();
     return () => {
-      subscription?.subscription.unsubscribe();
+      unsubscribe?.();
     };
   }, []);
 
-  const login = (newToken: string, newUser: User) => {
-    console.log('Logging in');
+  const login = (
+    newToken: string,
+    newUser: AppUser,
+    options?: { refreshToken?: string; csrfToken?: string },
+  ) => {
     setToken(newToken);
     setUser(newUser);
     localStorage.setItem('token', newToken);
     localStorage.setItem('user', JSON.stringify(newUser));
+
+    if (options?.refreshToken) {
+      localStorage.setItem('refresh_token', options.refreshToken);
+    }
+    if (options?.csrfToken) {
+      localStorage.setItem('csrf_token', options.csrfToken);
+    }
   };
 
   const logout = async () => {
-    console.log('Logging out');
     try {
-      await supabase.auth.refreshSession();
-    } catch {
+      await getAuthBackend().logout();
     } finally {
-      await supabase.auth.signOut();
       localStorage.removeItem('token');
+      localStorage.removeItem('refresh_token');
+      localStorage.removeItem('csrf_token');
       localStorage.removeItem('user');
       setToken(null);
       setUser(null);
@@ -94,7 +116,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   const refresh = async () => {
     try {
-      await supabase.auth.refreshSession();
+      await getAuthBackend().refreshSession();
     } catch {}
   };
 

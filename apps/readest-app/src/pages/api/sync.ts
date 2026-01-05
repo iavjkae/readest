@@ -1,7 +1,5 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { NextRequest, NextResponse } from 'next/server';
-import { PostgrestError } from '@supabase/supabase-js';
-import { createSupabaseClient } from '@/utils/supabase';
 import { BookDataRecord } from '@/types/book';
 import { transformBookConfigToDB } from '@/utils/transform';
 import { transformBookNoteToDB } from '@/utils/transform';
@@ -10,6 +8,7 @@ import { runMiddleware, corsAllMethods } from '@/utils/cors';
 import { SyncData, SyncResult, SyncType } from '@/libs/sync';
 import { validateUserAndToken } from '@/utils/access';
 import { DBBook, DBBookConfig } from '@/types/records';
+import { trailbaseRecords } from '@/services/backend/trailbaseRecords';
 
 const transformsToDB = {
   books: transformBookToDB,
@@ -25,14 +24,43 @@ const DBSyncTypeMap = {
 
 type TableName = keyof typeof transformsToDB;
 
-type DBError = { table: TableName; error: PostgrestError };
+type DBError = { table: TableName; error: Error };
+
+const toIso = (timestamp: number): string => new Date(timestamp).toISOString();
+
+const buildFilters = (filters: Array<[string, string, string]>) => {
+  const params = new URLSearchParams();
+  for (const [column, op, value] of filters) {
+    const key = op === '$eq' ? `filter[${column}]` : `filter[${column}][${op}]`;
+    params.append(key, value);
+  }
+  return params;
+};
+
+const mergeDedupe = <T extends Record<string, unknown>>(
+  arrays: T[][],
+  dedupeKeys?: (keyof T)[],
+): T[] => {
+  const merged = arrays.flat();
+  if (!dedupeKeys || dedupeKeys.length === 0) return merged;
+  const seen = new Set<string>();
+  return merged.filter((rec) => {
+    const key = dedupeKeys
+      .map((k) => String(rec[k] ?? ''))
+      .filter(Boolean)
+      .join('|');
+    if (!key) return true;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
 
 export async function GET(req: NextRequest) {
   const { user, token } = await validateUserAndToken(req.headers.get('authorization'));
   if (!user || !token) {
     return NextResponse.json({ error: 'Not authenticated' }, { status: 403 });
   }
-  const supabase = createSupabaseClient(token);
 
   const { searchParams } = new URL(req.url);
   const sinceParam = searchParams.get('since');
@@ -60,37 +88,54 @@ export async function GET(req: NextRequest) {
     };
 
     const queryTables = async (table: TableName, dedupeKeys?: (keyof BookDataRecord)[]) => {
-      let query = supabase.from(table).select('*').eq('user_id', user.id);
+      const apiName = table;
+
+      const baseFilters: Array<[string, string, string]> = [['user_id', '$eq', user.id]];
+
+      if (bookParam) baseFilters.push(['book_hash', '$eq', bookParam]);
+      if (metaHashParam) baseFilters.push(['meta_hash', '$eq', metaHashParam]);
+
+      const updatedParams = buildFilters([...baseFilters, ['updated_at', '$gt', sinceIso]]);
+      updatedParams.set('order', '-updated_at');
+      const deletedParams = buildFilters([...baseFilters, ['deleted_at', '$gt', sinceIso]]);
+      deletedParams.set('order', '-updated_at');
+
+      const [updated, deleted] = await Promise.all([
+        trailbaseRecords.list<Record<string, unknown>>(apiName, updatedParams, token),
+        trailbaseRecords.list<Record<string, unknown>>(apiName, deletedParams, token),
+      ]);
+
+      // If both book & meta_hash were provided, previous backend used OR.
+      // Trailbase list filters combine with AND, so we emulate OR via a second query.
+      let extraOr: Record<string, unknown>[] = [];
       if (bookParam && metaHashParam) {
-        query.or(`book_hash.eq.${bookParam},meta_hash.eq.${metaHashParam}`);
-      } else if (bookParam) {
-        query.eq('book_hash', bookParam);
-      } else if (metaHashParam) {
-        query.eq('meta_hash', metaHashParam);
+        const byBook = buildFilters([
+          ['user_id', '$eq', user.id],
+          ['book_hash', '$eq', bookParam],
+          ['updated_at', '$gt', sinceIso],
+        ]);
+        byBook.set('order', '-updated_at');
+
+        const byMeta = buildFilters([
+          ['user_id', '$eq', user.id],
+          ['meta_hash', '$eq', metaHashParam],
+          ['updated_at', '$gt', sinceIso],
+        ]);
+        byMeta.set('order', '-updated_at');
+
+        const [bookRes, metaRes] = await Promise.all([
+          trailbaseRecords.list<Record<string, unknown>>(apiName, byBook, token),
+          trailbaseRecords.list<Record<string, unknown>>(apiName, byMeta, token),
+        ]);
+        extraOr = [...bookRes.records, ...metaRes.records];
       }
 
-      query = query.or(`updated_at.gt.${sinceIso},deleted_at.gt.${sinceIso}`);
-      query = query.order('updated_at', { ascending: false });
-      console.log('Querying table:', table, 'since:', sinceIso);
-      const { data, error } = await query;
-      if (error) throw { table, error } as DBError;
-      let records = data;
-      if (dedupeKeys && dedupeKeys.length > 0) {
-        const seen = new Set<string>();
-        records = records.filter((rec) => {
-          const key = dedupeKeys
-            .map((k) => rec[k])
-            .filter(Boolean)
-            .join('|');
-          if (key && seen.has(key)) {
-            return false;
-          } else {
-            seen.add(key);
-            return true;
-          }
-        });
-      }
-      results[DBSyncTypeMap[table] as SyncType] = records || [];
+      const merged = mergeDedupe<Record<string, unknown>>(
+        [updated.records, deleted.records, extraOr],
+        (dedupeKeys as (keyof Record<string, unknown>)[]) || undefined,
+      );
+
+      results[DBSyncTypeMap[table] as SyncType] = merged as any;
     };
 
     if (!typeParam || typeParam === 'books') {
@@ -119,7 +164,7 @@ export async function GET(req: NextRequest) {
     return response;
   } catch (error: unknown) {
     console.error(error);
-    const errorMessage = (error as PostgrestError).message || 'Unknown error';
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return NextResponse.json({ error: errorMessage }, { status: 500 });
   }
 }
@@ -129,143 +174,52 @@ export async function POST(req: NextRequest) {
   if (!user || !token) {
     return NextResponse.json({ error: 'Not authenticated' }, { status: 403 });
   }
-  const supabase = createSupabaseClient(token);
   const body = await req.json();
   const { books = [], configs = [], notes = [] } = body as SyncData;
 
   const BATCH_SIZE = 100;
   const upsertRecords = async (
     table: TableName,
-    primaryKeys: (keyof BookDataRecord)[],
     records: BookDataRecord[],
   ) => {
     if (records.length === 0) return { data: [] };
 
-    const allAuthoritativeRecords: BookDataRecord[] = [];
+    // Trailbase record APIs require an INTEGER/UUID primary key. To support upsert without
+    // knowing that primary key, configure the underlying table with UNIQUE constraints on
+    // natural keys (e.g. user_id+book_hash) and set record_apis.conflict_resolution=REPLACE.
+    // Then POST /api/records/v1/<api> acts as a last-write-wins upsert.
 
-    // Process in batches
+    const allClientRecords: BookDataRecord[] = [];
+
     for (let i = 0; i < records.length; i += BATCH_SIZE) {
       const batch = records.slice(i, i + BATCH_SIZE);
 
-      // Transform all records to DB format
-      const dbRecords = batch.map((rec) => {
-        const dbRec = transformsToDB[table](rec, user.id);
+      for (const rec of batch) {
+        const dbRec = transformsToDB[table](rec, user.id) as DBBook | DBBookConfig;
+
+        // Ensure client payload stays consistent with previous behavior.
         rec.user_id = user.id;
-        rec.book_hash = dbRec.book_hash;
-        return { original: rec, db: dbRec };
-      });
+        rec.book_hash = (dbRec as any).book_hash;
 
-      // Build match conditions for batch
-      const matchConditions = dbRecords.map(({ original }) => {
-        const conditions: Record<string, string | number> = { user_id: user.id };
-        for (const pk of primaryKeys) {
-          conditions[pk] = original[pk]!;
+        // If client didn't provide updated_at, set it now.
+        if (!(dbRec as any).updated_at) {
+          (dbRec as any).updated_at = toIso(Date.now());
         }
-        return conditions;
-      });
 
-      // Fetch existing records for this batch
-      const orConditions = matchConditions
-        .map((cond) => {
-          const parts = Object.entries(cond).map(([key, val]) => `and(${key}.eq.${val})`);
-          return parts.join(',');
-        })
-        .join(',');
-
-      const { data: serverRecords, error: fetchError } = await supabase
-        .from(table)
-        .select()
-        .or(orConditions);
-
-      if (fetchError) {
-        return { error: fetchError.message };
+        await trailbaseRecords.create(table, dbRec as unknown as Record<string, unknown>, token);
+        allClientRecords.push(rec);
       }
-
-      // Create lookup map
-      const serverRecordsMap = new Map<string, BookDataRecord>();
-      (serverRecords || []).forEach((record) => {
-        const key = primaryKeys.map((pk) => record[pk]).join('|');
-        serverRecordsMap.set(key, record);
-      });
-
-      // Separate into inserts and updates
-      const toInsert: (DBBook | DBBookConfig | DBBookConfig)[] = [];
-      const toUpdate: (DBBook | DBBookConfig | DBBookConfig)[] = [];
-      const batchAuthoritativeRecords: BookDataRecord[] = [];
-
-      for (const { original, db: dbRec } of dbRecords) {
-        const key = primaryKeys.map((pk) => original[pk]).join('|');
-        const serverData = serverRecordsMap.get(key);
-
-        if (!serverData) {
-          dbRec.updated_at = new Date().toISOString();
-          toInsert.push(dbRec);
-        } else {
-          const clientUpdatedAt = dbRec.updated_at ? new Date(dbRec.updated_at).getTime() : 0;
-          const serverUpdatedAt = serverData.updated_at
-            ? new Date(serverData.updated_at).getTime()
-            : 0;
-          const clientDeletedAt = dbRec.deleted_at ? new Date(dbRec.deleted_at).getTime() : 0;
-          const serverDeletedAt = serverData.deleted_at
-            ? new Date(serverData.deleted_at).getTime()
-            : 0;
-          const clientIsNewer =
-            clientDeletedAt > serverDeletedAt || clientUpdatedAt > serverUpdatedAt;
-
-          if (clientIsNewer) {
-            toUpdate.push(dbRec);
-          } else {
-            batchAuthoritativeRecords.push(serverData);
-          }
-        }
-      }
-
-      // Batch insert
-      if (toInsert.length > 0) {
-        const { data: inserted, error: insertError } = await supabase
-          .from(table)
-          .insert(toInsert)
-          .select();
-
-        if (insertError) {
-          console.log(`Failed to insert ${table} records:`, JSON.stringify(toInsert));
-          return { error: insertError.message };
-        }
-        batchAuthoritativeRecords.push(...(inserted || []));
-      }
-
-      // Batch upsert
-      if (toUpdate.length > 0) {
-        const { data: updated, error: updateError } = await supabase
-          .from(table)
-          .upsert(toUpdate, {
-            onConflict: ['user_id', ...primaryKeys].join(','),
-          })
-          .select();
-
-        if (updateError) {
-          console.log(`Failed to update ${table} records:`, JSON.stringify(toUpdate));
-          return { error: updateError.message };
-        }
-        batchAuthoritativeRecords.push(...(updated || []));
-      }
-
-      allAuthoritativeRecords.push(...batchAuthoritativeRecords);
     }
 
-    return { data: allAuthoritativeRecords };
+    return { data: allClientRecords };
   };
 
   try {
     const [booksResult, configsResult, notesResult] = await Promise.all([
-      upsertRecords('books', ['book_hash'], books as BookDataRecord[]),
-      upsertRecords('book_configs', ['book_hash'], configs as BookDataRecord[]),
-      upsertRecords('book_notes', ['book_hash', 'id'], notes as BookDataRecord[]),
+      upsertRecords('books', books as BookDataRecord[]),
+      upsertRecords('book_configs', configs as BookDataRecord[]),
+      upsertRecords('book_notes', notes as BookDataRecord[]),
     ]);
-
-    if (booksResult?.error) throw new Error(booksResult.error);
-    if (configsResult?.error) throw new Error(configsResult.error);
-    if (notesResult?.error) throw new Error(notesResult.error);
 
     return NextResponse.json(
       {
@@ -277,7 +231,7 @@ export async function POST(req: NextRequest) {
     );
   } catch (error: unknown) {
     console.error(error);
-    const errorMessage = (error as PostgrestError).message || 'Unknown error';
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     return NextResponse.json({ error: errorMessage }, { status: 500 });
   }
 }

@@ -5,7 +5,11 @@ import {
   createOrUpdateSubscription,
   createOrUpdatePayment,
 } from '@/libs/payment/stripe/server';
-import { createSupabaseAdminClient } from '@/utils/supabase';
+import { trailbaseRecords } from '@/services/backend/trailbaseRecords';
+
+const getTrailbaseServiceToken = (): string | undefined => {
+  return process.env['TRAILBASE_SERVICE_TOKEN'] || undefined;
+};
 
 export async function POST(request: NextRequest) {
   try {
@@ -76,15 +80,14 @@ export async function POST(request: NextRequest) {
 
 async function handleSuccessfulPayment(session: Stripe.Checkout.Session, userId: string) {
   const customerId = session.customer as string;
-
-  await createOrUpdatePayment(userId, customerId, session.id);
+  await createOrUpdatePayment(userId, customerId, session.id, getTrailbaseServiceToken());
 }
 
 async function handleSuccessfulSubscription(session: Stripe.Checkout.Session, userId: string) {
   const customerId = session.customer as string;
   const subscriptionId = session.subscription as string;
 
-  await createOrUpdateSubscription(userId, customerId, subscriptionId);
+  await createOrUpdateSubscription(userId, customerId, subscriptionId, getTrailbaseServiceToken());
 }
 
 async function handleSuccessfulInvoice(invoice: Stripe.Invoice) {
@@ -95,32 +98,41 @@ async function handleSuccessfulInvoice(invoice: Stripe.Invoice) {
     return;
   }
 
-  const supabase = createSupabaseAdminClient();
-  const { data: customerData } = await supabase
-    .from('customers')
-    .select('user_id')
-    .eq('stripe_customer_id', customerId)
-    .single();
+  const customerParams = new URLSearchParams();
+  customerParams.set('limit', '1');
+  customerParams.set('filter[stripe_customer_id]', String(customerId));
+  const customerRes = await trailbaseRecords.list<any>(
+    'customers',
+    customerParams,
+    getTrailbaseServiceToken(),
+  );
+  const customerData = customerRes.records[0];
 
   if (!customerData?.user_id) {
     console.error('Customer not found:', customerId);
     return;
   }
 
-  await supabase
-    .from('subscriptions')
-    .update({
+  await trailbaseRecords.create(
+    'subscriptions',
+    {
+      stripe_subscription_id: subscriptionId,
       status: 'active',
       current_period_end: new Date(invoice.lines.data[0]!.period.end * 1000).toISOString(),
-    })
-    .eq('stripe_subscription_id', subscriptionId);
+      updated_at: new Date().toISOString(),
+    },
+    getTrailbaseServiceToken(),
+  );
 
-  await supabase
-    .from('plans')
-    .update({
+  await trailbaseRecords.create(
+    'plans',
+    {
+      user_id: customerData.user_id,
       status: 'active',
-    })
-    .eq('user_id', customerData.user_id);
+      updated_at: new Date().toISOString(),
+    },
+    getTrailbaseServiceToken(),
+  );
 }
 
 async function handleFailedInvoice(invoice: Stripe.Invoice) {
@@ -131,76 +143,97 @@ async function handleFailedInvoice(invoice: Stripe.Invoice) {
     return;
   }
 
-  const supabase = createSupabaseAdminClient();
-  const { data: customerData } = await supabase
-    .from('customers')
-    .select('user_id')
-    .eq('stripe_customer_id', customerId)
-    .single();
+  const customerParams = new URLSearchParams();
+  customerParams.set('limit', '1');
+  customerParams.set('filter[stripe_customer_id]', String(customerId));
+  const customerRes = await trailbaseRecords.list<any>(
+    'customers',
+    customerParams,
+    getTrailbaseServiceToken(),
+  );
+  const customerData = customerRes.records[0];
 
   if (!customerData?.user_id) {
     console.error('Customer not found:', customerId);
     return;
   }
 
-  await supabase
-    .from('subscriptions')
-    .update({
+  await trailbaseRecords.create(
+    'subscriptions',
+    {
+      stripe_subscription_id: subscriptionId,
       status: 'past_due',
-    })
-    .eq('stripe_subscription_id', subscriptionId);
+      updated_at: new Date().toISOString(),
+    },
+    getTrailbaseServiceToken(),
+  );
 
-  await supabase
-    .from('plans')
-    .update({
+  await trailbaseRecords.create(
+    'plans',
+    {
+      user_id: customerData.user_id,
       status: 'past_due',
-    })
-    .eq('id', customerData.user_id);
+      updated_at: new Date().toISOString(),
+    },
+    getTrailbaseServiceToken(),
+  );
 }
 
 async function handleSubscriptionUpdated(subscription: Stripe.Subscription) {
   const subscriptionId = subscription.id;
 
-  const supabase = createSupabaseAdminClient();
-  const { data: subscriptionData } = await supabase
-    .from('subscriptions')
-    .select('user_id, stripe_customer_id')
-    .eq('stripe_subscription_id', subscriptionId)
-    .single();
+  const params = new URLSearchParams();
+  params.set('limit', '1');
+  params.set('filter[stripe_subscription_id]', subscriptionId);
+  const subscriptionRes = await trailbaseRecords.list<any>(
+    'subscriptions',
+    params,
+    getTrailbaseServiceToken(),
+  );
+  const subscriptionData = subscriptionRes.records[0];
 
   if (!subscriptionData) {
     console.error('Subscription not found:', subscriptionId);
     return;
   }
   const { user_id, stripe_customer_id } = subscriptionData;
-  await createOrUpdateSubscription(user_id, stripe_customer_id, subscriptionId);
+  await createOrUpdateSubscription(user_id, stripe_customer_id, subscriptionId, getTrailbaseServiceToken());
 }
 
 async function handleSubscriptionCancelled(subscription: Stripe.Subscription) {
   const subscriptionId = subscription.id;
 
-  const supabase = createSupabaseAdminClient();
-  await supabase
-    .from('subscriptions')
-    .update({
+  await trailbaseRecords.create(
+    'subscriptions',
+    {
+      stripe_subscription_id: subscriptionId,
       status: 'cancelled',
       cancelled_at: new Date().toISOString(),
-    })
-    .eq('stripe_subscription_id', subscriptionId);
+      updated_at: new Date().toISOString(),
+    },
+    getTrailbaseServiceToken(),
+  );
 
-  const { data: subscriptionData } = await supabase
-    .from('subscriptions')
-    .select('user_id')
-    .eq('stripe_subscription_id', subscriptionId)
-    .single();
+  const params = new URLSearchParams();
+  params.set('limit', '1');
+  params.set('filter[stripe_subscription_id]', subscriptionId);
+  const subscriptionRes = await trailbaseRecords.list<any>(
+    'subscriptions',
+    params,
+    getTrailbaseServiceToken(),
+  );
+  const subscriptionData = subscriptionRes.records[0];
 
   if (subscriptionData?.user_id) {
-    await supabase
-      .from('plans')
-      .update({
+    await trailbaseRecords.create(
+      'plans',
+      {
+        user_id: subscriptionData.user_id,
         plan: 'free',
         status: 'cancelled',
-      })
-      .eq('id', subscriptionData.user_id);
+        updated_at: new Date().toISOString(),
+      },
+      getTrailbaseServiceToken(),
+    );
   }
 }

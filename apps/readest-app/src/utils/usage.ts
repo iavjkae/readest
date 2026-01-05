@@ -1,4 +1,4 @@
-import { createSupabaseAdminClient } from '@/utils/supabase';
+import { trailbaseRecords } from '@/services/backend/trailbaseRecords';
 
 export const USAGE_TYPES = {
   TRANSLATION_CHARS: 'translation_chars',
@@ -16,23 +16,26 @@ export class UsageStatsManager {
     usageType: string,
     increment: number = 1,
     metadata: Record<string, string | number> = {},
+    token?: string,
   ): Promise<number> {
     try {
-      const supabase = createSupabaseAdminClient();
-      const { data, error } = await supabase.rpc('increment_daily_usage', {
-        p_user_id: userId,
-        p_usage_type: usageType,
-        p_usage_date: new Date().toISOString().split('T')[0],
-        p_increment: increment,
-        p_metadata: metadata,
-      });
+      const usageDate = new Date().toISOString().split('T')[0]!;
 
-      if (error) {
-        console.error('Usage tracking error:', error);
-        return 0;
-      }
+      // Append-only event; current usage is computed by summing events.
+      await trailbaseRecords.create(
+        'usage_events',
+        {
+          user_id: userId,
+          usage_type: usageType,
+          usage_date: usageDate,
+          increment,
+          metadata: JSON.stringify(metadata),
+          created_at: new Date().toISOString(),
+        },
+        token,
+      );
 
-      return data || 0;
+      return await UsageStatsManager.getCurrentUsage(userId, usageType, 'daily', token);
     } catch (error) {
       console.error('Usage tracking failed:', error);
       return 0;
@@ -43,21 +46,24 @@ export class UsageStatsManager {
     userId: string,
     usageType: string,
     period: 'daily' | 'monthly' = 'daily',
+    token?: string,
   ): Promise<number> {
     try {
-      const supabase = createSupabaseAdminClient();
-      const { data, error } = await supabase.rpc('get_current_usage', {
-        p_user_id: userId,
-        p_usage_type: usageType,
-        p_period: period,
-      });
+      const params = new URLSearchParams();
+      params.set('limit', '1024');
+      params.set('filter[user_id]', userId);
+      params.set('filter[usage_type]', usageType);
 
-      if (error) {
-        console.error('Get current usage error:', error);
-        return 0;
+      if (period === 'daily') {
+        const usageDate = new Date().toISOString().split('T')[0]!;
+        params.set('filter[usage_date]', usageDate);
+      } else {
+        const ym = new Date().toISOString().slice(0, 7);
+        params.set('filter[usage_date][$like]', `${ym}-%`);
       }
 
-      return data || 0;
+      const res = await trailbaseRecords.list<any>('usage_events', params, token);
+      return (res.records || []).reduce((sum, row) => sum + Number(row.increment || 0), 0);
     } catch (error) {
       console.error('Get current usage failed:', error);
       return 0;

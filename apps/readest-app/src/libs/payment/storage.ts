@@ -1,19 +1,15 @@
 import { COMPLETED_PAYMENT_STATUSES } from '@/types/payment';
-import { createSupabaseAdminClient } from '@/utils/supabase';
+import { trailbaseRecords } from '@/services/backend/trailbaseRecords';
 
-export const updateUserStorage = async (userId: string) => {
-  const supabase = createSupabaseAdminClient();
-
+export const updateUserStorage = async (userId: string, token?: string) => {
   try {
-    const { data: payments, error: paymentsError } = await supabase
-      .from('payments')
-      .select('storage_gb')
-      .eq('user_id', userId)
-      .in('status', COMPLETED_PAYMENT_STATUSES);
+    const paymentsParams = new URLSearchParams();
+    paymentsParams.set('limit', '1024');
+    paymentsParams.set('filter[user_id]', userId);
+    paymentsParams.set('filter[status][$re]', `^(${COMPLETED_PAYMENT_STATUSES.join('|')})$`);
 
-    if (paymentsError) {
-      throw paymentsError;
-    }
+    const paymentsRes = await trailbaseRecords.list<any>('payments', paymentsParams, token);
+    const payments = paymentsRes.records || [];
 
     const totalStorageGB =
       payments?.reduce((sum, payment) => {
@@ -22,16 +18,16 @@ export const updateUserStorage = async (userId: string) => {
 
     console.log(`User ${userId} total storage: ${totalStorageGB} GB`);
 
-    const { error: updateError } = await supabase
-      .from('plans')
-      .update({
-        storage_purchased_bytes: totalStorageGB * 1024 * 1024 * 1024,
-      })
-      .eq('id', userId);
-
-    if (updateError) {
-      throw updateError;
-    }
+    // Upsert plan storage quota (requires record_apis.conflict_resolution=REPLACE and UNIQUE(user_id)).
+    await trailbaseRecords.create(
+      'plans',
+      {
+      user_id: userId,
+      storage_purchased_bytes: totalStorageGB * 1024 * 1024 * 1024,
+      updated_at: new Date().toISOString(),
+      },
+      token,
+    );
 
     return totalStorageGB;
   } catch (error) {

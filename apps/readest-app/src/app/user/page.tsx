@@ -225,8 +225,12 @@ const ProfilePage = () => {
     );
   }
 
-  const avatarUrl = user?.user_metadata?.['picture'] || user?.user_metadata?.['avatar_url'];
-  const userFullName = user?.user_metadata?.['full_name'] || '-';
+  const avatarUrlRaw = user?.user_metadata?.['picture'] ?? user?.user_metadata?.['avatar_url'];
+  const avatarUrl = typeof avatarUrlRaw === 'string' ? avatarUrlRaw : undefined;
+
+  const userFullNameRaw = user?.user_metadata?.['full_name'];
+  const userFullName =
+    typeof userFullNameRaw === 'string' && userFullNameRaw.trim() ? userFullNameRaw : '-';
   const userEmail = user?.email || '';
   const userPlanDetails =
     getPlanDetails(userProfilePlan, availablePlans) || getPlanDetails('free', availablePlans);

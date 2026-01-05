@@ -1,8 +1,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { corsAllMethods, runMiddleware } from '@/utils/cors';
-import { createSupabaseAdminClient } from '@/utils/supabase';
 import { validateUserAndToken } from '@/utils/access';
 import { deleteObject } from '@/utils/object';
+import { trailbaseRecords } from '@/services/backend/trailbaseRecords';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   await runMiddleware(req, res, corsAllMethods);
@@ -23,18 +23,16 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'Missing or invalid fileKey' });
     }
 
-    const supabase = createSupabaseAdminClient();
-    const { data: fileRecord, error: fileError } = await supabase
-      .from('files')
-      .select('user_id, id')
-      .eq('user_id', user.id)
-      .eq('file_key', fileKey)
-      .limit(1)
-      .single();
+    const params = new URLSearchParams();
+    params.set('limit', '1');
+    params.set('filter[user_id]', user.id);
+    params.set('filter[file_key]', fileKey);
+    params.set('filter[deleted_at][$is]', 'NULL');
 
-    if (fileError || !fileRecord) {
-      return res.status(404).json({ error: 'File not found' });
-    }
+    const listRes = await trailbaseRecords.list<Record<string, unknown>>('files', params, token);
+    const fileRecord = listRes.records[0] as any | undefined;
+
+    if (!fileRecord) return res.status(404).json({ error: 'File not found' });
 
     if (fileRecord.user_id !== user.id) {
       return res.status(403).json({ error: 'Unauthorized access to the file' });
@@ -42,12 +40,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     try {
       await deleteObject(fileKey);
-      const { error: deleteError } = await supabase.from('files').delete().eq('id', fileRecord.id);
 
-      if (deleteError) {
-        console.error('Error updating file record:', deleteError);
-        return res.status(500).json({ error: 'Could not update file record' });
-      }
+      await trailbaseRecords.delete('files', fileRecord.id, token);
 
       res.status(200).json({ message: 'File deleted successfully' });
     } catch (error) {

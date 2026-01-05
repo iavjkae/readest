@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getStripe } from '@/libs/payment/stripe/server';
 import { validateUserAndToken } from '@/utils/access';
-import { createSupabaseAdminClient } from '@/utils/supabase';
+import { trailbaseRecords } from '@/services/backend/trailbaseRecords';
 
 export async function POST(request: NextRequest) {
   const {
@@ -22,27 +22,32 @@ export async function POST(request: NextRequest) {
   };
 
   try {
-    const supabase = createSupabaseAdminClient();
-    const { data: customerData } = await supabase
-      .from('customers')
-      .select('stripe_customer_id')
-      .eq('user_id', user.id)
-      .single();
+    const customerParams = new URLSearchParams();
+    customerParams.set('limit', '1');
+    customerParams.set('filter[user_id]', user.id);
+    const customerRes = await trailbaseRecords.list<any>('customers', customerParams, token);
+    const customerData = customerRes.records[0];
 
     let customerId;
     if (!customerData?.stripe_customer_id) {
       const stripe = getStripe();
       const customer = await stripe.customers.create({
-        email: user.email,
+        email: user.email ?? undefined,
         metadata: {
           userId: user.id,
         },
       });
       customerId = customer.id;
-      await supabase.from('customers').insert({
-        user_id: user.id,
-        stripe_customer_id: customerId,
-      });
+      await trailbaseRecords.create(
+        'customers',
+        {
+          user_id: user.id,
+          stripe_customer_id: customerId,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+        token,
+      );
     } else {
       customerId = customerData.stripe_customer_id;
     }

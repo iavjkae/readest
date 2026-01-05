@@ -1,8 +1,8 @@
 import Stripe from 'stripe';
 import { UserPlan } from '@/types/quota';
-import { createSupabaseAdminClient } from '@/utils/supabase';
 import { PaymentStatus, StripePaymentData, StripeProductMetadata } from '@/types/payment';
 import { updateUserStorage } from '../storage';
+import { trailbaseRecords } from '@/services/backend/trailbaseRecords';
 
 let stripe: Stripe | null;
 
@@ -23,9 +23,9 @@ export const createOrUpdateSubscription = async (
   userId: string,
   customerId: string,
   subscriptionId: string,
+  token?: string,
 ) => {
   const stripe = getStripe();
-  const supabase = createSupabaseAdminClient();
 
   const subscription = await stripe.subscriptions.retrieve(subscriptionId, {
     expand: ['items.data.price.product'],
@@ -38,25 +38,13 @@ export const createOrUpdateSubscription = async (
   const plan = product.metadata?.plan || 'free';
 
   try {
-    const { data: existingSubscription } = await supabase
-      .from('subscriptions')
-      .select('*')
-      .eq('stripe_subscription_id', subscriptionId)
-      .single();
-
     const period_start = new Date(subscriptionItem.current_period_start * 1000).toISOString();
     const period_end = new Date(subscriptionItem.current_period_end * 1000).toISOString();
-    if (existingSubscription) {
-      await supabase
-        .from('subscriptions')
-        .update({
-          status: subscription.status,
-          current_period_start: period_start,
-          current_period_end: period_end,
-        })
-        .eq('id', existingSubscription.id);
-    } else {
-      await supabase.from('subscriptions').insert({
+
+    // Upsert via conflict_resolution=REPLACE + UNIQUE(stripe_subscription_id)
+    await trailbaseRecords.create(
+      'subscriptions',
+      {
         user_id: userId,
         stripe_customer_id: customerId,
         stripe_subscription_id: subscriptionId,
@@ -64,20 +52,25 @@ export const createOrUpdateSubscription = async (
         status: subscription.status,
         current_period_start: period_start,
         current_period_end: period_end,
+        updated_at: new Date().toISOString(),
         created_at: new Date().toISOString(),
-      });
-    }
+      },
+      token,
+    );
   } catch (error) {
     console.error('Error checking existing subscription:', error);
   }
 
-  await supabase
-    .from('plans')
-    .update({
+  await trailbaseRecords.create(
+    'plans',
+    {
+      user_id: userId,
       plan: ['active', 'trialing'].includes(subscription.status) ? plan : 'free',
       status: subscription.status,
-    })
-    .eq('id', userId);
+      updated_at: new Date().toISOString(),
+    },
+    token,
+  );
 };
 
 export const COMPLETED_PAYMENT_STATUSES: PaymentStatus[] = ['completed', 'succeeded'];
@@ -86,9 +79,9 @@ export const createOrUpdatePayment = async (
   userId: string,
   customerId: string,
   checkoutSessionId: string,
+  token?: string,
 ) => {
   const stripe = getStripe();
-  const supabase = createSupabaseAdminClient();
 
   const session = await stripe.checkout.sessions.retrieve(checkoutSessionId, {
     expand: ['line_items.data.price.product', 'payment_intent'],
@@ -121,15 +114,18 @@ export const createOrUpdatePayment = async (
       metadata: product?.metadata,
     };
 
-    const { error } = await supabase.from('payments').upsert(paymentData, {
-      onConflict: 'stripe_payment_intent_id',
-      ignoreDuplicates: false,
-    });
+    // Upsert via conflict_resolution=REPLACE + UNIQUE(stripe_payment_intent_id)
+    await trailbaseRecords.create(
+      'payments',
+      {
+        ...paymentData,
+        updated_at: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+      } as Record<string, unknown>,
+      token,
+    );
 
-    if (error) {
-      throw error;
-    }
-    await updateUserStorage(userId);
+    await updateUserStorage(userId, token);
   } catch (error) {
     console.error('Error creating or updating payment:', error);
     throw error;

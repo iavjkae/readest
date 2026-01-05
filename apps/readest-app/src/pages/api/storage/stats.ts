@@ -1,7 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createSupabaseAdminClient } from '@/utils/supabase';
 import { corsAllMethods, runMiddleware } from '@/utils/cors';
 import { validateUserAndToken, getStoragePlanData } from '@/utils/access';
+import { trailbaseRecords } from '@/services/backend/trailbaseRecords';
 
 interface StorageStats {
   totalFiles: number;
@@ -29,68 +29,49 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(403).json({ error: 'Not authenticated' });
     }
 
-    const supabase = createSupabaseAdminClient();
+    // Aggregate in-process (Trailbase Record API does not expose aggregation endpoints).
+    const limit = 1024;
+    let offset = 0;
+    let totalFiles = 0;
+    let totalSize = 0;
+    const grouped = new Map<string | null, { count: number; size: number }>();
 
-    // Get total file count and size
-    const { data: totalStats, error: totalError } = await supabase
-      .from('files')
-      .select('file_size')
-      .eq('user_id', user.id)
-      .is('deleted_at', null);
+    for (let page = 0; page < 50; page++) {
+      const params = new URLSearchParams();
+      params.set('limit', String(limit));
+      params.set('offset', String(offset));
+      params.set('order', 'id');
+      params.set('filter[user_id]', user.id);
+      params.set('filter[deleted_at][$is]', 'NULL');
 
-    if (totalError) {
-      console.error('Error querying total stats:', totalError);
-      return res.status(500).json({ error: 'Failed to retrieve storage statistics' });
+      const pageRes = await trailbaseRecords.list<any>('files', params, token);
+      const rows = pageRes.records || [];
+      if (rows.length === 0) break;
+
+      for (const row of rows) {
+        const size = Number(row.file_size || 0);
+        const bookHash = (row.book_hash ?? null) as string | null;
+        totalFiles += 1;
+        totalSize += size;
+        const current = grouped.get(bookHash) || { count: 0, size: 0 };
+        grouped.set(bookHash, { count: current.count + 1, size: current.size + size });
+      }
+
+      if (rows.length < limit) break;
+      offset += limit;
     }
-
-    const totalFiles = totalStats?.length || 0;
-    const totalSize = totalStats?.reduce((sum, file) => sum + (file.file_size || 0), 0) || 0;
 
     // Get storage plan data
     const { usage, quota } = getStoragePlanData(token);
     const usagePercentage = quota > 0 ? Math.round((usage / quota) * 100) : 0;
 
-    // Get stats grouped by book_hash
-    const { data: bookHashStats, error: bookHashError } = await supabase.rpc(
-      'get_storage_by_book_hash',
-      { p_user_id: user.id },
-    );
-
-    // Fallback if RPC function doesn't exist - manual aggregation
-    let byBookHash: Array<{ bookHash: string | null; fileCount: number; totalSize: number }> = [];
-
-    if (bookHashError) {
-      console.warn('RPC function not available, using fallback aggregation:', bookHashError);
-
-      const { data: allFiles, error: filesError } = await supabase
-        .from('files')
-        .select('book_hash, file_size')
-        .eq('user_id', user.id)
-        .is('deleted_at', null);
-
-      if (!filesError && allFiles) {
-        const grouped = new Map<string | null, { count: number; size: number }>();
-
-        allFiles.forEach((file) => {
-          const key = file.book_hash;
-          const current = grouped.get(key) || { count: 0, size: 0 };
-          grouped.set(key, {
-            count: current.count + 1,
-            size: current.size + file.file_size,
-          });
-        });
-
-        byBookHash = Array.from(grouped.entries())
-          .map(([bookHash, stats]) => ({
-            bookHash,
-            fileCount: stats.count,
-            totalSize: stats.size,
-          }))
-          .sort((a, b) => b.totalSize - a.totalSize);
-      }
-    } else if (bookHashStats) {
-      byBookHash = bookHashStats;
-    }
+    const byBookHash = Array.from(grouped.entries())
+      .map(([bookHash, stats]) => ({
+        bookHash,
+        fileCount: stats.count,
+        totalSize: stats.size,
+      }))
+      .sort((a, b) => b.totalSize - a.totalSize);
 
     const response: StorageStats = {
       totalFiles,

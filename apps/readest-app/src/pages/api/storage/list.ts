@@ -1,7 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import { createSupabaseAdminClient } from '@/utils/supabase';
 import { corsAllMethods, runMiddleware } from '@/utils/cors';
 import { validateUserAndToken } from '@/utils/access';
+import { trailbaseRecords } from '@/services/backend/trailbaseRecords';
 
 interface FileRecord {
   file_key: string;
@@ -47,38 +47,32 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const bookHash = reqQuery.bookHash as string | undefined;
     const search = reqQuery.search as string | undefined;
 
-    const supabase = createSupabaseAdminClient();
-
-    let query = supabase
-      .from('files')
-      .select('file_key, file_size, book_hash, created_at, updated_at', { count: 'exact' })
-      .eq('user_id', user.id)
-      .is('deleted_at', null);
-
-    if (bookHash) {
-      query = query.eq('book_hash', bookHash);
-    }
-
-    if (search) {
-      query = query.ilike('file_key', `%${search}%`);
-    }
-
     const validSortColumns = ['created_at', 'updated_at', 'file_size', 'file_key'];
     const sortColumn = validSortColumns.includes(sortBy) ? sortBy : 'created_at';
-    query = query.order(sortColumn, { ascending: sortOrder === 'asc' });
 
-    const from = (page - 1) * pageSize;
-    const to = from + pageSize - 1;
-    query = query.range(from, to);
+    const params = new URLSearchParams();
+    params.set('count', 'true');
+    params.set('limit', String(pageSize));
+    params.set('offset', String((page - 1) * pageSize));
+    params.set('order', `${sortOrder === 'asc' ? '' : '-'}${sortColumn}`);
+    params.set('filter[user_id]', user.id);
+    params.set('filter[deleted_at][$is]', 'NULL');
 
-    const { data: files, error: filesError, count } = await query;
+    if (bookHash) params.set('filter[book_hash]', bookHash);
+    if (search) params.set('filter[file_key][$like]', `%${search}%`);
 
-    if (filesError) {
-      console.error('Error querying files:', filesError);
+    let files: FileRecord[] = [];
+    let total = 0;
+
+    try {
+      const listRes = await trailbaseRecords.list<FileRecord>('files', params, token);
+      files = listRes.records || [];
+      total = listRes.total_count ?? 0;
+    } catch (err) {
+      console.error('Error querying files:', err);
       return res.status(500).json({ error: 'Failed to retrieve files' });
     }
 
-    const total = count || 0;
     const totalPages = Math.ceil(total / pageSize);
 
     // Get all book_hashes from the paginated results
@@ -92,19 +86,24 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     // match the search term. This is crucial for proper book grouping and selection.
     let allRelatedFiles = files || [];
     if (bookHashes.length > 0) {
-      const relatedQuery = supabase
-        .from('files')
-        .select('file_key, file_size, book_hash, created_at, updated_at')
-        .eq('user_id', user.id)
-        .is('deleted_at', null)
-        .in('book_hash', bookHashes);
+      // Trailbase Record API doesn't support IN(...) filters via query params.
+      // book_hashes are md5/hex-ish values, so we can safely use a regex OR.
+      const re = `^(${bookHashes.join('|')})$`;
+      const relatedParams = new URLSearchParams();
+      relatedParams.set('limit', '1024');
+      relatedParams.set('filter[user_id]', user.id);
+      relatedParams.set('filter[deleted_at][$is]', 'NULL');
+      relatedParams.set('filter[book_hash][$re]', re);
 
-      const { data: relatedFiles, error: relatedError } = await relatedQuery;
-
-      if (!relatedError && relatedFiles) {
+      try {
+        const relatedRes = await trailbaseRecords.list<FileRecord>('files', relatedParams, token);
+        const relatedFiles = relatedRes.records || [];
         const fileMap = new Map(allRelatedFiles.map((f) => [f.file_key, f]));
         relatedFiles.forEach((f) => fileMap.set(f.file_key, f));
         allRelatedFiles = Array.from(fileMap.values());
+      } catch (err) {
+        // If this fails, fall back to just the paged results.
+        console.warn('Failed to load related files:', err);
       }
     }
 

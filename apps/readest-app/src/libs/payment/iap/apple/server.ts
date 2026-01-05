@@ -1,6 +1,6 @@
 import { ApplePaymentData } from '@/types/payment';
-import { createSupabaseAdminClient } from '@/utils/supabase';
 import { updateUserStorage } from '@/libs/payment/storage';
+import { trailbaseRecords } from '@/services/backend/trailbaseRecords';
 import {
   isStoragePurchase,
   mapProductIdToProductName,
@@ -25,20 +25,28 @@ export type VerifiedPurchase = VerifiedIAP & {
   revocationReason?: number | null;
 };
 
-export async function createOrUpdateSubscription(userId: string, purchase: VerifiedPurchase) {
+export async function createOrUpdateSubscription(
+  userId: string,
+  purchase: VerifiedPurchase,
+  token?: string,
+) {
   try {
-    const supabase = createSupabaseAdminClient();
+    const existingParams = new URLSearchParams();
+    existingParams.set('limit', '1');
+    existingParams.set('filter[original_transaction_id]', purchase.originalTransactionId);
+    const existingRes = await trailbaseRecords.list<any>(
+      'apple_iap_subscriptions',
+      existingParams,
+      token,
+    );
+    const existingSubscription = existingRes.records[0];
 
-    const { data: existingSubscription } = await supabase
-      .from('apple_iap_subscriptions')
-      .select('*')
-      .eq('original_transaction_id', purchase.originalTransactionId)
-      .single();
     if (existingSubscription && existingSubscription.user_id !== userId) {
       throw new Error(IAPError.TRANSACTION_BELONGS_TO_ANOTHER_USER);
     }
 
-    const { data, error } = await supabase.from('apple_iap_subscriptions').upsert(
+    await trailbaseRecords.create(
+      'apple_iap_subscriptions',
       {
         user_id: userId,
         platform: purchase.platform,
@@ -54,45 +62,39 @@ export async function createOrUpdateSubscription(userId: string, purchase: Verif
         auto_renew_status: true,
         web_order_line_item_id: purchase.webOrderLineItemId,
         subscription_group_identifier: purchase.subscriptionGroupIdentifier,
-        created_at: new Date(),
-        updated_at: new Date(),
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       },
-      {
-        onConflict: 'user_id,original_transaction_id',
-      },
+      token,
     );
 
-    if (error) {
-      console.error('Database update error:', error);
-      throw new Error(`Database update failed: ${error.message}`);
-    }
-
     const plan = mapProductIdToUserPlan(purchase.productId, true);
-    await supabase
-      .from('plans')
-      .update({
+    await trailbaseRecords.create(
+      'plans',
+      {
+        user_id: userId,
         plan: ['active', 'trialing'].includes(purchase.status) ? plan : 'free',
         status: purchase.status,
-      })
-      .eq('id', userId);
+        updated_at: new Date().toISOString(),
+      },
+      token,
+    );
 
-    return data;
+    return;
   } catch (error) {
     console.error('Failed to update user subscription:', error);
     throw error;
   }
 }
 
-export async function createOrUpdatePayment(userId: string, purchase: VerifiedPurchase) {
+export async function createOrUpdatePayment(userId: string, purchase: VerifiedPurchase, token?: string) {
   try {
-    const supabase = createSupabaseAdminClient();
-
-    const existingPayment = await supabase
-      .from('payments')
-      .select('*')
-      .eq('apple_original_transaction_id', purchase.originalTransactionId)
-      .single();
-    if (existingPayment.data && existingPayment.data.user_id !== userId) {
+    const existingParams = new URLSearchParams();
+    existingParams.set('limit', '1');
+    existingParams.set('filter[apple_original_transaction_id]', purchase.originalTransactionId);
+    const existingRes = await trailbaseRecords.list<any>('payments', existingParams, token);
+    const existingPayment = existingRes.records[0];
+    if (existingPayment && existingPayment.user_id !== userId) {
       throw new Error(IAPError.TRANSACTION_BELONGS_TO_ANOTHER_USER);
     }
 
@@ -107,17 +109,19 @@ export async function createOrUpdatePayment(userId: string, purchase: VerifiedPu
       amount: purchase.amount,
       currency: purchase.currency,
     };
-    const { data, error } = await supabase.from('payments').upsert(paymentData, {
-      onConflict: 'apple_original_transaction_id',
-      ignoreDuplicates: false,
-    });
 
-    if (error) {
-      console.error('Database payment update error:', error);
-      throw new Error(`Database payment update failed: ${error.message}`);
-    }
-    await updateUserStorage(userId);
-    return data;
+    await trailbaseRecords.create(
+      'payments',
+      {
+        ...paymentData,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      } as Record<string, unknown>,
+      token,
+    );
+
+    await updateUserStorage(userId, token);
+    return;
   } catch (error) {
     console.error('Failed to update user payment:', error);
     throw error;
@@ -125,8 +129,9 @@ export async function createOrUpdatePayment(userId: string, purchase: VerifiedPu
 }
 
 export async function processPurchaseData(
-  user: { id: string; email?: string | undefined },
+  user: { id: string; email?: string | null | undefined },
   verificationResult: VerificationResult,
+  token?: string,
 ): Promise<VerifiedPurchase> {
   const transaction = verificationResult.transaction!;
 
@@ -136,7 +141,7 @@ export async function processPurchaseData(
 
   const purchase: VerifiedPurchase = {
     status: verificationResult.status!,
-    customerEmail: user.email!,
+    customerEmail: user.email ?? '',
     orderId: transaction.webOrderLineItemId || transaction.originalTransactionId,
     subscriptionId: transaction.webOrderLineItemId || transaction.originalTransactionId,
     planName: mapProductIdToProductName(transaction.productId),
@@ -158,9 +163,9 @@ export async function processPurchaseData(
   };
 
   if (purchase.planType === 'subscription') {
-    await createOrUpdateSubscription(user.id, purchase);
+    await createOrUpdateSubscription(user.id, purchase, token);
   } else if (purchase.planType === 'purchase') {
-    await createOrUpdatePayment(user.id, purchase);
+    await createOrUpdatePayment(user.id, purchase, token);
   }
 
   return purchase;

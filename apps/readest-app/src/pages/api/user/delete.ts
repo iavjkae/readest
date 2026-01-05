@@ -1,7 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { corsAllMethods, runMiddleware } from '@/utils/cors';
-import { createSupabaseAdminClient } from '@/utils/supabase';
 import { validateUserAndToken } from '@/utils/access';
+import { trailbaseFetch } from '@/services/backend/trailbaseRecords';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   await runMiddleware(req, res, corsAllMethods);
@@ -16,10 +16,11 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(403).json({ error: 'Not authenticated' });
     }
 
-    const supabaseAdmin = createSupabaseAdminClient();
-    const { error } = await supabaseAdmin.auth.admin.deleteUser(user.id);
-    if (error) {
-      return res.status(500).json({ error: error.message });
+    // Trailbase supports user deletion as part of its auth APIs.
+    // This deletes the currently authenticated user.
+    const upstream = await trailbaseFetch('/api/auth/v1/user', { method: 'DELETE', accessToken: token });
+    if (!upstream.ok) {
+      return res.status(upstream.status).json({ error: upstream.error.message });
     }
 
     res.status(200).json({ message: 'User deleted successfully' });

@@ -2,23 +2,37 @@ import { describe, it, expect, vi } from 'vitest';
 import { POST as applePost } from '@/app/api/apple/iap-verify/route';
 import { POST as googlePost } from '@/app/api/google/iap-verify/route';
 import { NextRequest } from 'next/server';
-import { setupSupabaseMocks } from '../helpers/supabase-mock';
+import { setupTrailbaseMocks } from '../helpers/trailbase-mock';
 
 const SKIP_IAP_API_TESTS = !process.env['ENABLE_IAP_API_TESTS'];
-vi.mock('@/utils/supabase', () => ({
-  supabase: {
-    auth: {
-      getUser: vi.fn(),
-      refreshSession: vi.fn(),
-    },
-    from: vi.fn(),
+vi.mock('@/services/backend/trailbaseRecords', () => ({
+  trailbaseRecords: {
+    list: vi.fn(),
+    create: vi.fn(),
+    delete: vi.fn(),
   },
-  createSupabaseAdminClient: vi.fn(),
+}));
+
+vi.mock('@/libs/payment/storage', () => ({
+  updateUserStorage: vi.fn(),
+}));
+
+vi.mock('@/services/backend', () => ({
+  getAuthBackend: () => ({
+    kind: 'trailbase',
+    getSession: vi.fn(),
+    refreshSession: vi.fn(),
+    logout: vi.fn(),
+    getUserFromAccessToken: vi.fn().mockResolvedValue({ id: 'test-user-123', email: 'test@example.com' }),
+    onAuthStateChange: vi.fn().mockResolvedValue(() => {}),
+    decodeClaims: vi.fn().mockReturnValue({ sub: 'test-user-123', email: 'test@example.com' }),
+  }),
+  getBackendKind: () => 'trailbase',
 }));
 
 describe.skipIf(SKIP_IAP_API_TESTS)('/api/apple/iap-verify', () => {
   it('should verify a valid Apple IAP transaction', async () => {
-    setupSupabaseMocks();
+    setupTrailbaseMocks();
     const request = new NextRequest('http://localhost:3000/api/apple/iap-verify', {
       method: 'POST',
       headers: {
@@ -42,7 +56,7 @@ describe.skipIf(SKIP_IAP_API_TESTS)('/api/apple/iap-verify', () => {
 
 describe.skipIf(SKIP_IAP_API_TESTS)('/api/google/iap-verify', () => {
   it('should verify a valid Google IAP purchase', async () => {
-    setupSupabaseMocks();
+    setupTrailbaseMocks();
     const request = new NextRequest('http://localhost:3000/api/google/iap-verify', {
       method: 'POST',
       headers: {

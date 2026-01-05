@@ -1,6 +1,6 @@
 import { GooglePaymentData } from '@/types/payment';
-import { createSupabaseAdminClient } from '@/utils/supabase';
 import { updateUserStorage } from '@/libs/payment/storage';
+import { trailbaseRecords } from '@/services/backend/trailbaseRecords';
 import {
   isStoragePurchase,
   mapProductIdToProductName,
@@ -36,20 +36,28 @@ export type VerifiedPurchase = VerifiedIAP & {
   userCancellationTimeMillis?: string | null;
 };
 
-export async function createOrUpdateSubscription(userId: string, purchase: VerifiedPurchase) {
+export async function createOrUpdateSubscription(
+  userId: string,
+  purchase: VerifiedPurchase,
+  token?: string,
+) {
   try {
-    const supabase = createSupabaseAdminClient();
+    const existingParams = new URLSearchParams();
+    existingParams.set('limit', '1');
+    existingParams.set('filter[purchase_token]', purchase.purchaseToken);
+    const existingRes = await trailbaseRecords.list<any>(
+      'google_iap_subscriptions',
+      existingParams,
+      token,
+    );
+    const existingSubscription = existingRes.records[0];
 
-    const { data: existingSubscription } = await supabase
-      .from('google_iap_subscriptions')
-      .select('*')
-      .eq('purchase_token', purchase.purchaseToken)
-      .single();
     if (existingSubscription && existingSubscription.user_id !== userId) {
       throw new Error(IAPError.TRANSACTION_BELONGS_TO_ANOTHER_USER);
     }
 
-    const { data, error } = await supabase.from('google_iap_subscriptions').upsert(
+    await trailbaseRecords.create(
+      'google_iap_subscriptions',
       {
         user_id: userId,
         platform: purchase.platform,
@@ -74,43 +82,38 @@ export async function createOrUpdateSubscription(userId: string, purchase: Verif
         obfuscated_external_profile_id: purchase.obfuscatedExternalProfileId,
         cancel_reason: purchase.cancelReason,
         user_cancellation_time_millis: purchase.userCancellationTimeMillis,
-        created_at: new Date(),
-        updated_at: new Date(),
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
       },
-      {
-        onConflict: 'user_id,order_id',
-      },
+      token,
     );
 
-    if (error) {
-      console.error('Database update error:', error);
-      throw new Error(`Database update failed: ${error.message}`);
-    }
-
     const plan = mapProductIdToUserPlan(purchase.productId, true);
-    await supabase
-      .from('plans')
-      .update({
+    await trailbaseRecords.create(
+      'plans',
+      {
+        user_id: userId,
         plan: ['active', 'trialing'].includes(purchase.status) ? plan : 'free',
         status: purchase.status,
-      })
-      .eq('id', userId);
+        updated_at: new Date().toISOString(),
+      },
+      token,
+    );
 
-    return data;
+    return;
   } catch (error) {
     console.error('Failed to update user subscription:', error);
     throw error;
   }
 }
 
-export async function createOrUpdatePayment(userId: string, purchase: VerifiedPurchase) {
+export async function createOrUpdatePayment(userId: string, purchase: VerifiedPurchase, token?: string) {
   try {
-    const supabase = createSupabaseAdminClient();
-    const { data: existingPayment } = await supabase
-      .from('payments')
-      .select('*')
-      .eq('google_purchase_token', purchase.purchaseToken)
-      .single();
+    const existingParams = new URLSearchParams();
+    existingParams.set('limit', '1');
+    existingParams.set('filter[google_purchase_token]', purchase.purchaseToken);
+    const existingRes = await trailbaseRecords.list<any>('payments', existingParams, token);
+    const existingPayment = existingRes.records[0];
 
     if (existingPayment && existingPayment.user_id !== userId) {
       throw new Error(IAPError.TRANSACTION_BELONGS_TO_ANOTHER_USER);
@@ -127,18 +130,18 @@ export async function createOrUpdatePayment(userId: string, purchase: VerifiedPu
       currency: purchase.currency,
     };
 
-    const { data, error } = await supabase.from('payments').upsert(paymentData, {
-      onConflict: 'google_purchase_token',
-      ignoreDuplicates: false,
-    });
+    await trailbaseRecords.create(
+      'payments',
+      {
+        ...paymentData,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      } as Record<string, unknown>,
+      token,
+    );
 
-    if (error) {
-      console.error('Database payment update error:', error);
-      throw new Error(`Database payment update failed: ${error.message}`);
-    }
-
-    await updateUserStorage(userId);
-    return data;
+    await updateUserStorage(userId, token);
+    return;
   } catch (error) {
     console.error('Failed to update user payment:', error);
     throw error;
@@ -146,9 +149,10 @@ export async function createOrUpdatePayment(userId: string, purchase: VerifiedPu
 }
 
 export async function processPurchaseData(
-  user: { id: string; email?: string | undefined },
+  user: { id: string; email?: string | null | undefined },
   verifyParams: VerifyPurchaseParams,
   verificationResult: VerificationResult,
+  token?: string,
 ): Promise<VerifiedPurchase> {
   const { orderId, purchaseToken, productId, packageName } = verifyParams;
   const purchaseData = verificationResult.purchaseData!;
@@ -166,7 +170,7 @@ export async function processPurchaseData(
     purchase = {
       platform: 'android',
       status: verificationResult.status!,
-      customerEmail: user.email!,
+      customerEmail: user.email ?? '',
       orderId: subData.orderId || orderId,
       subscriptionId: subData.orderId || orderId,
       planName: mapProductIdToProductName(productId),
@@ -198,7 +202,7 @@ export async function processPurchaseData(
     purchase = {
       platform: 'android',
       status: verificationResult.status!,
-      customerEmail: user.email!,
+      customerEmail: user.email ?? '',
       orderId: prodData.orderId || purchaseToken,
       subscriptionId: prodData.orderId || purchaseToken,
       planName: mapProductIdToProductName(productId),
@@ -226,9 +230,9 @@ export async function processPurchaseData(
   }
 
   if (isSubscription) {
-    await createOrUpdateSubscription(user.id, purchase);
+    await createOrUpdateSubscription(user.id, purchase, token);
   } else {
-    await createOrUpdatePayment(user.id, purchase);
+    await createOrUpdatePayment(user.id, purchase, token);
   }
 
   return purchase;

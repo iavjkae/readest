@@ -1,8 +1,8 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { corsAllMethods, runMiddleware } from '@/utils/cors';
-import { createSupabaseAdminClient } from '@/utils/supabase';
 import { validateUserAndToken } from '@/utils/access';
 import { deleteObject } from '@/utils/object';
+import { trailbaseRecords } from '@/services/backend/trailbaseRecords';
 
 interface BulkDeleteResult {
   success: string[];
@@ -42,30 +42,26 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'All fileKeys must be strings' });
     }
 
-    const supabase = createSupabaseAdminClient();
+    // Resolve file records (need primary key for deletion; Trailbase doesn't support IN()).
+    const fileRecords: Array<{ id: string | number; user_id: string; file_key: string }> = [];
+    for (const fileKey of fileKeys) {
+      const params = new URLSearchParams();
+      params.set('limit', '1');
+      params.set('filter[user_id]', user.id);
+      params.set('filter[file_key]', fileKey);
+      params.set('filter[deleted_at][$is]', 'NULL');
 
-    // Fetch all files that match the provided keys and belong to the user
-    const { data: fileRecords, error: fileError } = await supabase
-      .from('files')
-      .select('id, user_id, file_key')
-      .eq('user_id', user.id)
-      .in('file_key', fileKeys)
-      .is('deleted_at', null);
-
-    if (fileError) {
-      console.error('Error querying files:', fileError);
-      return res.status(500).json({ error: 'Failed to retrieve files for deletion' });
+      const resList = await trailbaseRecords.list<any>('files', params, token);
+      const rec = resList.records[0];
+      if (rec) {
+        fileRecords.push({ id: rec.id, user_id: rec.user_id, file_key: rec.file_key });
+      }
     }
 
-    if (!fileRecords || fileRecords.length === 0) {
-      return res.status(404).json({ error: 'No matching files found' });
-    }
+    if (fileRecords.length === 0) return res.status(404).json({ error: 'No matching files found' });
 
-    // Verify all files belong to the user
-    const unauthorizedFiles = fileRecords.filter((record) => record.user_id !== user.id);
-    if (unauthorizedFiles.length > 0) {
-      return res.status(403).json({ error: 'Unauthorized access to one or more files' });
-    }
+    const unauthorizedFiles = fileRecords.filter((r) => r.user_id !== user.id);
+    if (unauthorizedFiles.length > 0) return res.status(403).json({ error: 'Unauthorized access to one or more files' });
 
     // Process deletions
     const results = await Promise.allSettled(
@@ -75,14 +71,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           await deleteObject(fileRecord.file_key);
 
           // Delete from database
-          const { error: deleteError } = await supabase
-            .from('files')
-            .delete()
-            .eq('id', fileRecord.id);
-
-          if (deleteError) {
-            throw new Error(`Database deletion failed: ${deleteError.message}`);
-          }
+          await trailbaseRecords.delete('files', fileRecord.id, token);
 
           return { fileKey: fileRecord.file_key, success: true };
         } catch (error) {
