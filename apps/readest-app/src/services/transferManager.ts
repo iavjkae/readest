@@ -267,11 +267,6 @@ class TransferManager {
             type: 'error',
             message: _('Please log in to continue'),
           });
-        } else if (errorMessage.includes('Insufficient storage quota')) {
-          eventDispatcher.dispatch('toast', {
-            type: 'error',
-            message: _('Insufficient storage quota'),
-          });
         } else {
           eventDispatcher.dispatch('toast', {
             type: 'error',

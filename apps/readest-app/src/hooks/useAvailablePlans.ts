@@ -1,17 +1,4 @@
-import { useEffect, useState } from 'react';
-import { fetchAndTransformIAPPlans, isIAPAvailable } from '@/libs/payment/iap/client';
-import { fetchStripePlans } from '@/libs/payment/stripe/client';
 import { AvailablePlan } from '@/types/quota';
-import { stubTranslation as _ } from '@/utils/misc';
-
-const IAP_PRODUCT_IDS = [
-  'com.bilingify.readest.monthly.plus',
-  'com.bilingify.readest.monthly.pro',
-  'com.bilingify.readest.storage.1gb.purchase',
-  'com.bilingify.readest.storage.2gb.purchase',
-  'com.bilingify.readest.storage.5gb.purchase',
-  'com.bilingify.readest.storage.10gb.purchase',
-];
 
 interface UseAvailablePlansParams {
   hasIAP: boolean;
@@ -19,40 +6,14 @@ interface UseAvailablePlansParams {
 }
 
 export const useAvailablePlans = ({ hasIAP, onError }: UseAvailablePlansParams) => {
-  const [availablePlans, setAvailablePlans] = useState<AvailablePlan[]>([]);
-  const [iapAvailable, setIapAvailable] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<Error | null>(null);
+  void hasIAP;
+  void onError;
 
-  useEffect(() => {
-    const fetchPlans = async () => {
-      setLoading(true);
-      setError(null);
-
-      try {
-        if (hasIAP && (await isIAPAvailable())) {
-          const plans = await fetchAndTransformIAPPlans(IAP_PRODUCT_IDS);
-          setAvailablePlans(plans);
-          setIapAvailable(true);
-        } else {
-          const plans = await fetchStripePlans();
-          setAvailablePlans(plans);
-        }
-      } catch (err) {
-        const error = err instanceof Error ? err : new Error('Unknown error');
-        setError(error);
-        console.error(`Failed to fetch ${hasIAP ? 'IAP' : 'Stripe'} plans:`, error);
-
-        if (onError) {
-          onError(_('Failed to load subscription plans.'));
-        }
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchPlans();
-  }, [hasIAP, onError]);
+  // Payment has been removed. Keep API stable for existing UI.
+  const availablePlans: AvailablePlan[] = [];
+  const iapAvailable = false;
+  const loading = false;
+  const error: Error | null = null;
 
   return { availablePlans, iapAvailable, loading, error };
 };

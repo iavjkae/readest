@@ -44,11 +44,13 @@ export const useProgressSync = (bookKey: string) => {
     const bookHash = bookKey.split('-')[0]!;
     const metaHash = book.metaHash;
     await syncConfigs([], bookHash, metaHash, 'pull');
+    // Even if remote returns no records, we must allow future pushes.
+    configPulled.current = true;
   };
 
   const syncConfig = async () => {
     if (!configPulled.current) {
-      pullConfig(bookKey);
+      await pullConfig(bookKey);
     } else {
       const config = getConfig(bookKey);
       const view = getView(bookKey);
@@ -64,7 +66,7 @@ export const useProgressSync = (bookKey: string) => {
         } catch (error) {
           console.warn('Failed to convert CFI to XPointer', error);
         }
-        pushConfig(bookKey, config);
+        await pushConfig(bookKey, config);
       }
     }
   };

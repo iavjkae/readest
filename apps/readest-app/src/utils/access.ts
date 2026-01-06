@@ -1,7 +1,5 @@
 import { getAuthBackend } from '@/services/backend';
 import { UserPlan } from '@/types/quota';
-import { DEFAULT_DAILY_TRANSLATION_QUOTA, DEFAULT_STORAGE_QUOTA } from '@/services/constants';
-import { getDailyUsage } from '@/services/translators/utils';
 
 interface Token {
   plan: UserPlan;
@@ -10,63 +8,53 @@ interface Token {
   [key: string]: string | number;
 }
 
+// Payment/subscription has been removed.
+// All users are treated as the highest entitlement with no quotas.
+const UNLIMITED_PLAN: UserPlan = 'pro';
+const UNLIMITED_QUOTA = Number.MAX_SAFE_INTEGER;
+
 export const getSubscriptionPlan = (token: string): UserPlan => {
-  const claims = getAuthBackend().decodeClaims(token) as Partial<Token>;
-  return (claims['plan'] as UserPlan) || 'free';
+  void token;
+  return UNLIMITED_PLAN;
 };
 
 export const getUserProfilePlan = (token: string): UserPlan => {
-  const claims = getAuthBackend().decodeClaims(token) as Partial<Token>;
-  let plan = (claims['plan'] as UserPlan) || 'free';
-  if (plan === 'free') {
-    const purchasedQuota = Number(claims['storage_purchased_bytes'] || 0);
-    if (purchasedQuota > 0) {
-      plan = 'purchase';
-    }
-  }
-  return plan;
+  void token;
+  return UNLIMITED_PLAN;
 };
 
 export const STORAGE_QUOTA_GRACE_BYTES = 10 * 1024 * 1024; // 10 MB grace
 
 export const getStoragePlanData = (token: string) => {
   const data = (getAuthBackend().decodeClaims(token) as Partial<Token>) || {};
-  const plan = (data['plan'] as UserPlan) || 'free';
   const usage = Number(data['storage_usage_bytes'] || 0);
-  const purchasedQuota = Number(data['storage_purchased_bytes'] || 0);
-  const fixedQuota = parseInt(process.env['NEXT_PUBLIC_STORAGE_FIXED_QUOTA'] || '0');
-  const planQuota = fixedQuota || DEFAULT_STORAGE_QUOTA[plan] || DEFAULT_STORAGE_QUOTA['free'];
-  const quota = planQuota + purchasedQuota;
+  const quota = UNLIMITED_QUOTA;
 
   return {
-    plan,
+    plan: UNLIMITED_PLAN,
     usage,
     quota,
   };
 };
 
 export const getTranslationPlanData = (token: string) => {
-  const data = (getAuthBackend().decodeClaims(token) as Partial<Token>) || {};
-  const plan: UserPlan = (data['plan'] as UserPlan) || 'free';
-  const usage = getDailyUsage() || 0;
-  const quota = DEFAULT_DAILY_TRANSLATION_QUOTA[plan];
+  void token;
+  const usage = 0;
+  const quota = UNLIMITED_QUOTA;
 
   return {
-    plan,
+    plan: UNLIMITED_PLAN,
     usage,
     quota,
   };
 };
 
 export const getDailyTranslationPlanData = (token: string) => {
-  const data = (getAuthBackend().decodeClaims(token) as Partial<Token>) || {};
-  const plan = (data['plan'] as UserPlan) || 'free';
-  const fixedQuota = parseInt(process.env['NEXT_PUBLIC_TRANSLATION_FIXED_QUOTA'] || '0');
-  const quota =
-    fixedQuota || DEFAULT_DAILY_TRANSLATION_QUOTA[plan] || DEFAULT_DAILY_TRANSLATION_QUOTA['free'];
+  void token;
+  const quota = UNLIMITED_QUOTA;
 
   return {
-    plan,
+    plan: UNLIMITED_PLAN,
     quota,
   };
 };

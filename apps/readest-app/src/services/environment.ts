@@ -11,7 +11,17 @@ export const isTauriAppPlatform = () => process.env['NEXT_PUBLIC_APP_PLATFORM'] 
 export const isWebAppPlatform = () => process.env['NEXT_PUBLIC_APP_PLATFORM'] === 'web';
 export const hasCli = () => window.__READEST_CLI_ACCESS === true;
 export const isPWA = () => window.matchMedia('(display-mode: standalone)').matches;
-export const getBaseUrl = () => process.env['NEXT_PUBLIC_API_BASE_URL'] ?? READEST_WEB_BASE_URL;
+export const getBaseUrl = () => {
+  const fromEnv = process.env['NEXT_PUBLIC_API_BASE_URL'];
+  if (fromEnv) return fromEnv;
+
+  // In self-hosted or local deployments (e.g. Docker), the app should call its own
+  // Next.js API routes on the same origin by default.
+  if (typeof window !== 'undefined') return window.location.origin;
+
+  // Server-side fallback (build-time / SSR).
+  return READEST_WEB_BASE_URL;
+};
 export const getNodeBaseUrl = () =>
   process.env['NEXT_PUBLIC_NODE_BASE_URL'] ?? READEST_NODE_BASE_URL;
 

@@ -7,7 +7,6 @@ import { jwtDecode } from 'jwt-decode';
 import { useAuth } from '@/context/AuthContext';
 import { useThemeStore } from '@/store/themeStore';
 import { useTranslation } from '@/hooks/useTranslation';
-import { getUserProfilePlan } from '@/utils/access';
 import { TrailbaseAuthBackend } from '@/services/backend/trailbaseAuthBackend';
 
 type Mode = 'login' | 'register' | 'reset';
@@ -63,11 +62,7 @@ export default function TrailbaseAuthPage() {
 
         login(auth_token, user, { refreshToken: refresh_token, csrfToken: csrf_token });
 
-        let next = '/library';
-        if (getUserProfilePlan(auth_token) === 'free') {
-          next = '/user';
-        }
-        router.push(next);
+        router.push('/library');
         return;
       }
 
