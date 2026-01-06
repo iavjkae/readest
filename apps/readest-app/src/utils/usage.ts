@@ -19,6 +19,8 @@ export class UsageStatsManager {
     token?: string,
   ): Promise<number> {
     try {
+      if (!token) return 0;
+
       const usageDate = new Date().toISOString().split('T')[0]!;
 
       // Append-only event; current usage is computed by summing events.
@@ -49,6 +51,8 @@ export class UsageStatsManager {
     token?: string,
   ): Promise<number> {
     try {
+      if (!token) return 0;
+
       const params = new URLSearchParams();
       params.set('limit', '1024');
       params.set('filter[user_id]', userId);

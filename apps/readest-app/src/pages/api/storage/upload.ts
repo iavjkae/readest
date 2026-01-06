@@ -53,6 +53,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           book_hash: bookHash,
           file_key: fileKey,
           file_size: fileSize,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
         },
         token,
       );

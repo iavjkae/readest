@@ -1,0 +1,96 @@
+# Readest + Trailbase config
+# This file lives in the repo and is mounted into the traildepot volume.
+
+email {}
+server {
+  application_name: "TrailBase"
+  logs_retention_sec: 604800
+}
+auth {
+  auth_token_ttl_sec: 3600
+  refresh_token_ttl_sec: 2592000
+}
+jobs {}
+
+# Record APIs required by Readest sync/storage/usage.
+# Keep permissions simple: authenticated users can CRUD, and access rules
+# restrict rows to the authenticated user.
+record_apis {
+  name: "books"
+  table_name: "books"
+  conflict_resolution: REPLACE
+  autofill_missing_user_id_columns: true
+  acl_authenticated: CREATE
+  acl_authenticated: READ
+  acl_authenticated: UPDATE
+  acl_authenticated: DELETE
+  acl_authenticated: SCHEMA
+  create_access_rule: "(_REQ_.user_id IS NULL OR _REQ_.user_id = _USER_.id)"
+  read_access_rule: "_ROW_.user_id = _USER_.id"
+  update_access_rule: "_ROW_.user_id = _USER_.id AND (_REQ_.user_id IS NULL OR _REQ_.user_id = _USER_.id)"
+  delete_access_rule: "_ROW_.user_id = _USER_.id"
+}
+
+record_apis {
+  name: "book_configs"
+  table_name: "book_configs"
+  conflict_resolution: REPLACE
+  autofill_missing_user_id_columns: true
+  acl_authenticated: CREATE
+  acl_authenticated: READ
+  acl_authenticated: UPDATE
+  acl_authenticated: DELETE
+  acl_authenticated: SCHEMA
+  create_access_rule: "(_REQ_.user_id IS NULL OR _REQ_.user_id = _USER_.id)"
+  read_access_rule: "_ROW_.user_id = _USER_.id"
+  update_access_rule: "_ROW_.user_id = _USER_.id AND (_REQ_.user_id IS NULL OR _REQ_.user_id = _USER_.id)"
+  delete_access_rule: "_ROW_.user_id = _USER_.id"
+}
+
+record_apis {
+  name: "book_notes"
+  table_name: "book_notes"
+  conflict_resolution: REPLACE
+  autofill_missing_user_id_columns: true
+  acl_authenticated: CREATE
+  acl_authenticated: READ
+  acl_authenticated: UPDATE
+  acl_authenticated: DELETE
+  acl_authenticated: SCHEMA
+  create_access_rule: "(_REQ_.user_id IS NULL OR _REQ_.user_id = _USER_.id)"
+  read_access_rule: "_ROW_.user_id = _USER_.id"
+  update_access_rule: "_ROW_.user_id = _USER_.id AND (_REQ_.user_id IS NULL OR _REQ_.user_id = _USER_.id)"
+  delete_access_rule: "_ROW_.user_id = _USER_.id"
+}
+
+record_apis {
+  name: "files"
+  table_name: "files"
+  conflict_resolution: REPLACE
+  autofill_missing_user_id_columns: true
+  acl_authenticated: CREATE
+  acl_authenticated: READ
+  acl_authenticated: UPDATE
+  acl_authenticated: DELETE
+  acl_authenticated: SCHEMA
+  create_access_rule: "(_REQ_.user_id IS NULL OR _REQ_.user_id = _USER_.id)"
+  read_access_rule: "_ROW_.user_id = _USER_.id"
+  update_access_rule: "_ROW_.user_id = _USER_.id AND (_REQ_.user_id IS NULL OR _REQ_.user_id = _USER_.id)"
+  delete_access_rule: "_ROW_.user_id = _USER_.id"
+}
+
+record_apis {
+  name: "usage_events"
+  table_name: "usage_events"
+  conflict_resolution: REPLACE
+  autofill_missing_user_id_columns: true
+  acl_authenticated: CREATE
+  acl_authenticated: READ
+  acl_authenticated: UPDATE
+  acl_authenticated: DELETE
+  acl_authenticated: SCHEMA
+  create_access_rule: "(_REQ_.user_id IS NULL OR _REQ_.user_id = _USER_.id)"
+  read_access_rule: "_ROW_.user_id = _USER_.id"
+  update_access_rule: "_ROW_.user_id = _USER_.id AND (_REQ_.user_id IS NULL OR _REQ_.user_id = _USER_.id)"
+  delete_access_rule: "_ROW_.user_id = _USER_.id"
+}

@@ -28,6 +28,12 @@ type DBError = { table: TableName; error: Error };
 
 const toIso = (timestamp: number): string => new Date(timestamp).toISOString();
 
+const toMs = (iso?: string | null): number | undefined => {
+  if (!iso) return undefined;
+  const t = new Date(iso).getTime();
+  return Number.isFinite(t) ? t : undefined;
+};
+
 const buildFilters = (filters: Array<[string, string, string]>) => {
   const params = new URLSearchParams();
   for (const [column, op, value] of filters) {
@@ -39,14 +45,14 @@ const buildFilters = (filters: Array<[string, string, string]>) => {
 
 const mergeDedupe = <T extends Record<string, unknown>>(
   arrays: T[][],
-  dedupeKeys?: (keyof T)[],
+  dedupeKeys?: string[],
 ): T[] => {
   const merged = arrays.flat();
   if (!dedupeKeys || dedupeKeys.length === 0) return merged;
   const seen = new Set<string>();
   return merged.filter((rec) => {
     const key = dedupeKeys
-      .map((k) => String(rec[k] ?? ''))
+      .map((k) => String((rec as any)[k] ?? ''))
       .filter(Boolean)
       .join('|');
     if (!key) return true;
@@ -87,7 +93,7 @@ export async function GET(req: NextRequest) {
       book_configs: null,
     };
 
-    const queryTables = async (table: TableName, dedupeKeys?: (keyof BookDataRecord)[]) => {
+    const queryTables = async (table: TableName, dedupeKeys?: string[]) => {
       const apiName = table;
 
       const baseFilters: Array<[string, string, string]> = [['user_id', '$eq', user.id]];
@@ -132,7 +138,7 @@ export async function GET(req: NextRequest) {
 
       const merged = mergeDedupe<Record<string, unknown>>(
         [updated.records, deleted.records, extraOr],
-        (dedupeKeys as (keyof Record<string, unknown>)[]) || undefined,
+        dedupeKeys,
       );
 
       results[DBSyncTypeMap[table] as SyncType] = merged as any;
@@ -145,7 +151,7 @@ export async function GET(req: NextRequest) {
       await queryTables('book_configs').catch((err) => (errors['book_configs'] = err));
     }
     if (!typeParam || typeParam === 'notes') {
-      await queryTables('book_notes', ['id']).catch((err) => (errors['book_notes'] = err));
+      await queryTables('book_notes', ['note_id']).catch((err) => (errors['book_notes'] = err));
     }
 
     const dbErrors = Object.values(errors).filter((err) => err !== null);
@@ -191,10 +197,60 @@ export async function POST(req: NextRequest) {
 
     const allClientRecords: BookDataRecord[] = [];
 
+    const loadExistingBook = async (bookHash: string): Promise<Record<string, unknown> | null> => {
+      const params = new URLSearchParams();
+      params.set('limit', '1');
+      params.set('filter[user_id]', user.id);
+      params.set('filter[book_hash]', bookHash);
+      // Prefer non-deleted record when present.
+      params.set('filter[deleted_at][$is]', 'NULL');
+      const res = await trailbaseRecords.list<Record<string, unknown>>('books', params, token);
+      return (res.records && res.records[0]) ? (res.records[0] as Record<string, unknown>) : null;
+    };
+
     for (let i = 0; i < records.length; i += BATCH_SIZE) {
       const batch = records.slice(i, i + BATCH_SIZE);
 
       for (const rec of batch) {
+        // Some clients send partial payloads during incremental progress sync.
+        // Because Trailbase uses conflict_resolution=REPLACE for upsert, missing
+        // NOT NULL columns would overwrite existing rows with NULL and fail.
+        if (table === 'books') {
+          const r: any = rec as any;
+          const bookHash = r.hash || r.book_hash;
+          const needsBackfill = !r.title || !r.author || !r.format || r.createdAt === undefined || r.createdAt === null;
+          if (bookHash && needsBackfill) {
+            const existing = await loadExistingBook(String(bookHash));
+            if (existing) {
+              if (!r.title && typeof existing['title'] === 'string') r.title = existing['title'];
+              if (!r.author && typeof existing['author'] === 'string') r.author = existing['author'];
+              if (!r.format && typeof existing['format'] === 'string') r.format = existing['format'];
+              if (r.createdAt === undefined || r.createdAt === null) {
+                const ms = toMs(existing['created_at'] as any);
+                if (ms !== undefined) r.createdAt = ms;
+              }
+            }
+          }
+
+          // If this is a brand-new record and the client sent a partial payload,
+          // ensure NOT NULL columns have non-null defaults so we never write NULL.
+          if (!r.title) r.title = '';
+          if (!r.author) r.author = '';
+          if (!r.format) r.format = 'EPUB';
+          if (r.createdAt === undefined || r.createdAt === null) r.createdAt = Date.now();
+        }
+
+        if (table === 'book_notes') {
+          const r: any = rec as any;
+          // Ensure NOT NULL columns always have a value.
+          if (r.note == null) r.note = '';
+          if (!r.type) r.type = 'annotation';
+          if (r.cfi == null) r.cfi = '';
+          if (!r.id) r.id = r.note_id || `${Date.now()}`;
+          if (r.createdAt == null) r.createdAt = Date.now();
+          if (r.updatedAt == null) r.updatedAt = Date.now();
+        }
+
         const dbRec = transformsToDB[table](rec, user.id) as DBBook | DBBookConfig;
 
         // Ensure client payload stays consistent with previous behavior.
@@ -206,7 +262,14 @@ export async function POST(req: NextRequest) {
           (dbRec as any).updated_at = toIso(Date.now());
         }
 
-        await trailbaseRecords.create(table, dbRec as unknown as Record<string, unknown>, token);
+        try {
+          await trailbaseRecords.create(table, dbRec as unknown as Record<string, unknown>, token);
+        } catch (err: unknown) {
+          if (err instanceof Error) {
+            err.message = `${table}: ${err.message}`;
+          }
+          throw err;
+        }
         allClientRecords.push(rec);
       }
     }

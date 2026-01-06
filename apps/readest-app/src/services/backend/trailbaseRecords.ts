@@ -25,10 +25,23 @@ const buildUrl = (path: string): string => {
   return `${base}${path.startsWith('/') ? '' : '/'}${path}`;
 };
 
-const parseJsonSafely = async (res: Response): Promise<unknown> => {
+const readBodySafely = async (res: Response): Promise<unknown> => {
   const contentType = res.headers.get('content-type') || '';
-  if (!contentType.includes('application/json')) return undefined;
-  return await res.json().catch(() => undefined);
+  const text = await res.text().catch(() => '');
+
+  if (!text) return undefined;
+
+  if (contentType.includes('application/json')) {
+    try {
+      return JSON.parse(text);
+    } catch {
+      // If Trailbase mislabels JSON or returns invalid JSON, keep the raw body.
+      return text;
+    }
+  }
+
+  // Trailbase sometimes returns plain text bodies on errors.
+  return text;
 };
 
 export const trailbaseFetch = async (
@@ -47,17 +60,19 @@ export const trailbaseFetch = async (
     cache: 'no-store',
   });
 
-  const json = await parseJsonSafely(res);
+  const body = await readBodySafely(res);
 
   if (!res.ok) {
     const message =
-      typeof json === 'object' && json && 'error' in json
-        ? String((json as any).error)
-        : `Trailbase request failed (${res.status})`;
-    return { ok: false, status: res.status, error: new TrailbaseHttpError(message, res.status, json) };
+      typeof body === 'object' && body && 'error' in (body as any)
+        ? String((body as any).error)
+        : typeof body === 'string' && body.trim()
+          ? body
+          : `Trailbase request failed (${res.status})`;
+    return { ok: false, status: res.status, error: new TrailbaseHttpError(message, res.status, body) };
   }
 
-  return { ok: true, status: res.status, json };
+  return { ok: true, status: res.status, json: body };
 };
 
 const normalizeListResponse = <T>(json: unknown): TrailbaseListResponse<T> => {
@@ -101,7 +116,10 @@ export const trailbaseRecords = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(record),
     });
-    if (!res.ok) throw res.error;
+    if (!res.ok) {
+      res.error.message = `${apiName}: ${res.error.message}`;
+      throw res.error;
+    }
 
     // Create usually returns the record id (string|number). Fall back to unknown.
     const json = res.json;

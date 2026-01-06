@@ -1,9 +1,22 @@
 export const getTrailbaseBaseUrl = (): string => {
-  const baseUrl =
-    process.env['NEXT_PUBLIC_TRAILBASE_URL'] ||
+  // In Docker, we often need two different URLs:
+  // - server runtime (inside the container): http://trailbase:4000
+  // - browser (outside the container):      http://localhost:4000
+  // Prefer the server-only env var when running on the server.
+  const isServer = typeof window === 'undefined';
+
+  const serverBaseUrl =
     process.env['TRAILBASE_URL'] ||
+    process.env['NEXT_PUBLIC_TRAILBASE_URL'] ||
     process.env['NEXT_PUBLIC_TRAILBASE_BASE_URL'] ||
     '';
+
+  const clientBaseUrl =
+    process.env['NEXT_PUBLIC_TRAILBASE_URL'] ||
+    process.env['NEXT_PUBLIC_TRAILBASE_BASE_URL'] ||
+    '';
+
+  const baseUrl = isServer ? serverBaseUrl : clientBaseUrl;
 
   if (!baseUrl) {
     throw new Error('Trailbase base url is not configured (NEXT_PUBLIC_TRAILBASE_URL/TRAILBASE_URL)');

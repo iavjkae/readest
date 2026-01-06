@@ -8,8 +8,9 @@ export interface DBBook {
   author: string;
   group_id?: string;
   group_name?: string;
-  tags?: string[];
-  progress?: [number, number];
+  // Stored as JSON strings in the database (TEXT columns).
+  tags?: string | null;
+  progress?: string | null;
 
   metadata?: string | null;
   created_at?: string;
@@ -37,7 +38,10 @@ export interface DBBookNote {
   user_id: string;
   book_hash: string;
   meta_hash?: string;
-  id: string;
+  // The record API primary key is an INTEGER column named `id`.
+  // The app's logical note id is stored in `note_id`.
+  id?: number;
+  note_id: string;
   type: string;
   cfi: string;
   text?: string;

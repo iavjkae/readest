@@ -1,6 +1,21 @@
 services:
+  minio:
+    image: minio/minio:latest
+    container_name: readest-minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: "readest"
+      MINIO_ROOT_PASSWORD: "readestreadest"
+    volumes:
+      - minio_data:/data
+    command: ["server", "/data", "--console-address", ":9001"]
+
   trailbase:
-    image: trailbase/trailbase:latest
+    build:
+      context: .
+      dockerfile: ops/trailbase/Dockerfile
     container_name: readest-trailbase
     ports:
       - "4000:4000"
@@ -17,15 +32,28 @@ services:
       dockerfile: Dockerfile.release
       args:
         # Public URL for browser clients (baked at build-time into Next.js).
-        NEXT_PUBLIC_TRAILBASE_URL: "http://trailbase:4000"
+        NEXT_PUBLIC_TRAILBASE_URL: "http://localhost:4000"
     container_name: readest-web
     depends_on:
+      - minio
       - trailbase
     ports:
       - "3000:3000"
     environment:
       # Server-side URL (used by Next.js server runtime inside the container).
       TRAILBASE_URL: "http://trailbase:4000"
+
+      # Object storage (local dev): use S3-compatible MinIO.
+      OBJECT_STORAGE_TYPE: "s3"
+      NEXT_PUBLIC_OBJECT_STORAGE_TYPE: "s3"
+      S3_BUCKET_NAME: "readest"
+      S3_REGION: "us-east-1"
+      # Internal endpoint used for server-side bucket checks/deletes.
+      S3_ENDPOINT_INTERNAL: "http://minio:9000"
+      # Public endpoint returned in presigned URLs for the browser.
+      S3_ENDPOINT_PUBLIC: "http://localhost:9000"
+      S3_ACCESS_KEY_ID: "readest"
+      S3_SECRET_ACCESS_KEY: "readestreadest"
 
       # Dev-only convenience: allow decoding JWTs without signature verification.
       # For production, set TRAILBASE_JWT_PUBLIC_KEY_PEM and keep this false.
@@ -38,3 +66,6 @@ services:
 volumes:
   trailbase_depot:
     name: readest_trailbase_depot
+
+  minio_data:
+    name: readest_minio_data
