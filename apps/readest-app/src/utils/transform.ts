@@ -10,6 +10,19 @@ import {
 import { DBBookConfig, DBBook, DBBookNote } from '@/types/records';
 import { sanitizeString } from './sanitize';
 
+const safeJsonParse = <T = unknown>(value: unknown): T | undefined => {
+  if (value == null) return undefined;
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value) as T;
+    } catch {
+      return undefined;
+    }
+  }
+  // In some cases (e.g. differing backends / migrations), values may already be decoded.
+  return value as T;
+};
+
 export const transformBookConfigToDB = (bookConfig: unknown, userId: string): DBBookConfig => {
   const {
     bookHash,
@@ -51,9 +64,9 @@ export const transformBookConfigFromDB = (dbBookConfig: DBBookConfig): BookConfi
     metaHash: meta_hash,
     location,
     xpointer,
-    progress: progress && JSON.parse(progress),
-    searchConfig: search_config && JSON.parse(search_config),
-    viewSettings: view_settings && JSON.parse(view_settings),
+    progress: safeJsonParse(progress),
+    searchConfig: safeJsonParse(search_config),
+    viewSettings: safeJsonParse(view_settings),
     updatedAt: new Date(updated_at!).getTime(),
   } as BookConfig;
 };
@@ -124,10 +137,10 @@ export const transformBookFromDB = (dbBook: DBBook): Book => {
     author,
     groupId: group_id,
     groupName: group_name,
-    tags: tags ? JSON.parse(tags) : undefined,
-    progress: progress ? JSON.parse(progress) : undefined,
+    tags: safeJsonParse(tags) ?? undefined,
+    progress: safeJsonParse(progress) ?? undefined,
     sourceTitle: source_title,
-    metadata: metadata ? JSON.parse(metadata) : null,
+    metadata: safeJsonParse(metadata) ?? undefined,
     createdAt: new Date(created_at!).getTime(),
     updatedAt: new Date(updated_at!).getTime(),
     deletedAt: deleted_at ? new Date(deleted_at).getTime() : null,
