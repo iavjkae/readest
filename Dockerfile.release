@@ -45,9 +45,11 @@ ENV HOSTNAME=0.0.0.0
 WORKDIR /app
 
 # Next.js standalone output
-COPY --from=build /app/apps/readest-app/.next/standalone ./
-COPY --from=build /app/apps/readest-app/.next/static ./apps/readest-app/.next/static
-COPY --from=build /app/apps/readest-app/public ./apps/readest-app/public
+COPY --from=build --chown=node:node /app/apps/readest-app/.next/standalone ./
+COPY --from=build --chown=node:node /app/apps/readest-app/.next/static ./apps/readest-app/.next/static
+COPY --from=build --chown=node:node /app/apps/readest-app/public ./apps/readest-app/public
+
+USER node
 
 EXPOSE 3000
 

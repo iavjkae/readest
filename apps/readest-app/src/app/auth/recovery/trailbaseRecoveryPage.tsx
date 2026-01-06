@@ -6,7 +6,7 @@ import { useThemeStore } from '@/store/themeStore';
 
 /**
  * TrailBase password reset is typically handled via email links and the built-in auth UI.
- * This page keeps a minimal UX to avoid a hard dependency on Supabase's auth UI.
+ * This page keeps a minimal UX to avoid a hard dependency on any backend-specific auth UI.
  */
 export default function TrailbaseRecoveryPage() {
   const _ = useTranslation();

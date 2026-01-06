@@ -68,7 +68,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         unsubscribe = fn;
       })
       .catch(() => {
-        // If subscription cannot be established, fall back to local state.
+        // If remote session cannot be established, fall back to local state.
       });
 
     authBackend.refreshSession().catch(() => {

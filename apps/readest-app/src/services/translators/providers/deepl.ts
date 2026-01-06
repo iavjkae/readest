@@ -9,7 +9,6 @@ export const deeplProvider: TranslationProvider = {
   name: 'deepl',
   label: _('DeepL'),
   authRequired: true,
-  quotaExceeded: false,
   translate: async (
     text: string[],
     sourceLang: string,

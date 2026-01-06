@@ -12,7 +12,6 @@ import { DOWNLOAD_READEST_URL } from '@/services/constants';
 import { useAuth } from '@/context/AuthContext';
 import { useEnv } from '@/context/EnvContext';
 import { useThemeStore } from '@/store/themeStore';
-import { useQuotaStats } from '@/hooks/useQuotaStats';
 import { useSettingsStore } from '@/store/settingsStore';
 import { useTranslation } from '@/hooks/useTranslation';
 import { useResponsiveSize } from '@/hooks/useResponsiveSize';
@@ -27,7 +26,6 @@ import { saveSysSettings } from '@/helpers/settings';
 import { selectDirectory } from '@/utils/bridge';
 import UserAvatar from '@/components/UserAvatar';
 import MenuItem from '@/components/MenuItem';
-import Quota from '@/components/Quota';
 import Menu from '@/components/Menu';
 
 interface SettingsMenuProps {
@@ -44,7 +42,6 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ setIsDropdownOpen }) => {
   const router = useRouter();
   const { envConfig, appService } = useEnv();
   const { user } = useAuth();
-  const { userProfilePlan, quotas } = useQuotaStats(true);
   const { themeMode, setThemeMode } = useThemeStore();
   const { settings, setSettingsDialogOpen } = useSettingsStore();
   const [isAutoUpload, setIsAutoUpload] = useState(settings.autoUpload);
@@ -169,11 +166,6 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ setIsDropdownOpen }) => {
     }
   };
 
-  const handleUpgrade = () => {
-    navigateToProfile(router);
-    setIsDropdownOpen?.(false);
-  };
-
   const handleSetRootDir = () => {
     setMigrateDataDirDialogVisible(true);
     setIsDropdownOpen?.(false);
@@ -248,7 +240,7 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ setIsDropdownOpen }) => {
               : _('Logged in')
           }
           labelClass='!max-w-40'
-          aria-label={_('View account details and quota')}
+          aria-label={_('View account details')}
           Icon={
             avatarUrl ? (
               <UserAvatar url={avatarUrl} size={iconSize} DefaultIcon={PiUserCircleCheck} />
@@ -258,9 +250,6 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ setIsDropdownOpen }) => {
           }
         >
           <ul className='flex flex-col'>
-            <button onClick={handleUserProfile} className='w-full'>
-              <Quota quotas={quotas} labelClassName='h-10 pl-3 pr-2' />
-            </button>
             <MenuItem label={_('Account')} noIcon onClick={handleUserProfile} />
           </ul>
         </MenuItem>
@@ -372,9 +361,6 @@ const SettingsMenu: React.FC<SettingsMenuProps> = ({ setIsDropdownOpen }) => {
         </>
       )}
       <hr aria-hidden='true' className='border-base-200 my-1' />
-      {user && userProfilePlan === 'free' && (
-        <MenuItem label={_('Upgrade to Readest Premium')} onClick={handleUpgrade} />
-      )}
       {isWebAppPlatform() && <MenuItem label={_('Download Readest')} onClick={downloadReadest} />}
       <MenuItem label={_('About Readest')} onClick={showAboutReadest} />
       <MenuItem

@@ -1,0 +1,35 @@
+http:
+  routers:
+    readest:
+      entryPoints:
+        - web
+      rule: "Host(`readest.localhost`)"
+      service: readest
+
+    minio:
+      entryPoints:
+        - web
+      rule: "Host(`minio.localhost`)"
+      service: minio
+
+    minioConsole:
+      entryPoints:
+        - web
+      rule: "Host(`minio-console.localhost`)"
+      service: minioConsole
+
+  services:
+    readest:
+      loadBalancer:
+        servers:
+          - url: "http://readest-web:3000"
+
+    minio:
+      loadBalancer:
+        servers:
+          - url: "http://minio:9000"
+
+    minioConsole:
+      loadBalancer:
+        servers:
+          - url: "http://minio:9001"

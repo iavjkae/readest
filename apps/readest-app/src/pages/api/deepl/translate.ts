@@ -2,11 +2,7 @@ import crypto from 'crypto';
 import { NextApiRequest, NextApiResponse } from 'next';
 import { corsAllMethods, runMiddleware } from '@/utils/cors';
 import { getCloudflareContext } from '@opennextjs/cloudflare';
-import {
-  getDailyTranslationPlanData,
-  getSubscriptionPlan,
-  validateUserAndToken,
-} from '@/utils/access';
+import { validateUserAndToken } from '@/utils/access';
 import { ErrorCodes } from '@/services/translators';
 import { UsageStatsManager } from '@/utils/usage';
 
@@ -39,21 +35,6 @@ const generateCacheKey = (text: string, sourceLang: string, targetLang: string):
   return `tr:${hash}`;
 };
 
-const checkDailyUsage = async (userId: string, token: string, chars: number) => {
-  const { quota: dailyQuota } = getDailyTranslationPlanData(token);
-  const dailyUsage = await UsageStatsManager.getCurrentUsage(
-    userId,
-    'translation_chars',
-    'daily',
-    token,
-  );
-
-  if (dailyQuota <= dailyUsage + chars) {
-    throw new Error(ErrorCodes.DAILY_QUOTA_EXCEEDED);
-  }
-  return dailyUsage;
-};
-
 const updateDailyUsage = async (
   userId: string | undefined,
   token: string | undefined,
@@ -62,13 +43,11 @@ const updateDailyUsage = async (
   if (!userId || !token) return 0;
 
   try {
-    const userPlan = getSubscriptionPlan(token);
     const newUsage = await UsageStatsManager.trackUsage(
       userId,
       'translation_chars',
       incrementUsage,
       {
-        plan_type: userPlan,
         source: 'deepl_api',
       },
       token,
@@ -97,16 +76,18 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
   const deepFreeApiUrl = DEEPL_FREE_API || DEFAULT_DEEPL_FREE_API;
   const deeplProApiUrl = DEEPL_PRO_API || DEFAULT_DEEPL_PRO_API;
 
-  let deeplApiUrl = deepFreeApiUrl;
-  let userPlan = 'free';
-  if (user && token) {
-    userPlan = getSubscriptionPlan(token);
-    if (userPlan === 'pro') deeplApiUrl = deeplProApiUrl;
-  }
+  // Payment/quota removed: choose PRO endpoint when PRO keys exist, otherwise use FREE.
+  const hasProKeys = Boolean((process.env['DEEPL_PRO_API_KEYS'] || '').trim());
+  const hasFreeKeys = Boolean((process.env['DEEPL_FREE_API_KEYS'] || '').trim());
+  const deeplApiUrl = hasProKeys ? deeplProApiUrl : deepFreeApiUrl;
   const deeplAuthKey =
     deeplApiUrl === deeplProApiUrl
       ? getDeepLAPIKey(process.env['DEEPL_PRO_API_KEYS'])
       : getDeepLAPIKey(process.env['DEEPL_FREE_API_KEYS']);
+
+  if (!deeplAuthKey || (!hasProKeys && !hasFreeKeys)) {
+    return res.status(500).json({ error: 'DeepL API keys are not configured' });
+  }
 
   const {
     text,
@@ -139,7 +120,6 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
         }
 
         if (!user || !token) return res.status(401).json({ error: ErrorCodes.UNAUTHORIZED });
-        await checkDailyUsage(user?.id, token, singleText.length);
 
         return await callDeepLAPI(
           singleText,
@@ -166,11 +146,7 @@ const handler = async (req: NextApiRequest, res: NextApiResponse) => {
     });
     return res.status(200).json({ translations });
   } catch (error) {
-    if (error instanceof Error && error.message.includes(ErrorCodes.DAILY_QUOTA_EXCEEDED)) {
-      return res.status(429).json({ error: ErrorCodes.DAILY_QUOTA_EXCEEDED });
-    } else {
-      console.error('Error proxying DeepL request:', error);
-    }
+    console.error('Error proxying DeepL request:', error);
     return res.status(500).json({ error: ErrorCodes.INTERNAL_SERVER_ERROR });
   }
 };

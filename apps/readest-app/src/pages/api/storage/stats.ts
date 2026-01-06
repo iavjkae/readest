@@ -1,14 +1,14 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { corsAllMethods, runMiddleware } from '@/utils/cors';
-import { validateUserAndToken, getStoragePlanData } from '@/utils/access';
+import { validateUserAndToken } from '@/utils/access';
 import { trailbaseRecords } from '@/services/backend/trailbaseRecords';
 
 interface StorageStats {
   totalFiles: number;
   totalSize: number;
   usage: number;
-  quota: number;
-  usagePercentage: number;
+  quota: number | null;
+  usagePercentage: number | null;
   byBookHash: Array<{
     bookHash: string | null;
     fileCount: number;
@@ -61,9 +61,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       offset += limit;
     }
 
-    // Get storage plan data
-    const { usage, quota } = getStoragePlanData(token);
-    const usagePercentage = quota > 0 ? Math.round((usage / quota) * 100) : 0;
+    const usage = totalSize;
+    const quota = null;
+    const usagePercentage = null;
 
     const byBookHash = Array.from(grouped.entries())
       .map(([bookHash, stats]) => ({

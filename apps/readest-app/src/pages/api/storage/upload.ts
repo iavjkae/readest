@@ -1,10 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import { corsAllMethods, runMiddleware } from '@/utils/cors';
-import {
-  getStoragePlanData,
-  validateUserAndToken,
-  STORAGE_QUOTA_GRACE_BYTES,
-} from '@/utils/access';
+import { validateUserAndToken } from '@/utils/access';
 import { getUploadSignedUrl } from '@/utils/object';
 import { trailbaseRecords } from '@/services/backend/trailbaseRecords';
 
@@ -26,10 +22,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'Missing file info' });
     }
 
-    const { usage, quota } = getStoragePlanData(token);
-    if (usage + fileSize > quota + STORAGE_QUOTA_GRACE_BYTES) {
-      return res.status(403).json({ error: 'Insufficient storage quota', usage });
-    }
+    const usage = 0;
+    const quota = null;
 
     const fileKey = `${user.id}/${fileName}`;
 

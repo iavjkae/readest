@@ -1,0 +1,100 @@
+services:
+  traefik:
+    image: traefik:v3.1
+    container_name: readest-traefik
+    restart: unless-stopped
+    command:
+      - --providers.file.directory=/etc/traefik/dynamic
+      - --providers.file.watch=true
+      - --entrypoints.web.address=:80
+    ports:
+      - "80:80"
+    volumes:
+      - ./ops/traefik/dynamic:/etc/traefik/dynamic:ro
+    networks:
+      - readest_net
+
+  minio:
+    image: minio/minio:latest
+    container_name: readest-minio
+    restart: unless-stopped
+    environment:
+      MINIO_ROOT_USER: "readest"
+      MINIO_ROOT_PASSWORD: "readestreadest"
+    volumes:
+      - minio_data:/data
+    command: ["server", "/data", "--console-address", ":9001"]
+    networks:
+      - readest_net
+
+  trailbase:
+    build:
+      context: .
+      dockerfile: ops/trailbase/Dockerfile
+    container_name: readest-trailbase
+    restart: unless-stopped
+    environment:
+      ADDRESS: "0.0.0.0:4000"
+    volumes:
+      - trailbase_depot:/app/traildepot
+    # Keep Trailbase private (no published ports)
+    networks:
+      - readest_net
+
+  readest-web:
+    build:
+      context: .
+      dockerfile: Dockerfile.release
+      args:
+        # Browser traffic should go through the same-origin proxy (/api/trailbase)
+        # so Trailbase does not need to be publicly exposed.
+        NEXT_PUBLIC_TRAILBASE_URL: "/api/trailbase"
+    container_name: readest-web
+    restart: unless-stopped
+    depends_on:
+      - trailbase
+      - minio
+      - traefik
+    environment:
+      NODE_ENV: "production"
+
+      # Internal URL used by Next.js server runtime inside the container.
+      TRAILBASE_URL: "http://trailbase:4000"
+
+      # Production: verify JWTs. Provide the public key used by Trailbase.
+      TRAILBASE_ALLOW_UNVERIFIED_JWT: "false"
+      # Loaded from a mounted file (see volumes below)
+      TRAILBASE_JWT_PUBLIC_KEY_PEM_FILE: "/run/secrets/trailbase_jwt_public_key.pem"
+
+      # Object storage (required for cloud storage features)
+      OBJECT_STORAGE_TYPE: "s3"
+      S3_BUCKET_NAME: "readest"
+      S3_REGION: "us-east-1"
+      # Internal endpoint used by server-side operations (bucket checks/deletes).
+      S3_ENDPOINT_INTERNAL: "http://minio:9000"
+      # Public endpoint returned in presigned URLs for browsers.
+      # In production, set this to your real public S3/R2 hostname.
+      S3_ENDPOINT_PUBLIC: "http://minio.localhost"
+      S3_ACCESS_KEY_ID: "readest"
+      S3_SECRET_ACCESS_KEY: "readestreadest"
+
+    volumes:
+      - ./secrets/trailbase_jwt_public_key.pem:/run/secrets/trailbase_jwt_public_key.pem:ro
+
+    # Light hardening (avoid options that commonly break Next runtime)
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - readest_net
+
+networks:
+  readest_net:
+    name: readest_net
+
+volumes:
+  trailbase_depot:
+    name: readest_trailbase_depot
+  minio_data:
+    name: readest_minio_data

@@ -25,6 +25,25 @@ export interface SyncData {
 }
 
 export class SyncClient {
+  private async readErrorMessage(res: Response): Promise<string> {
+    if (res.status === 401 || res.status === 403) return 'Not authenticated';
+
+    const contentType = res.headers.get('content-type') ?? '';
+    if (contentType.includes('application/json')) {
+      const json = await res.json().catch(() => null);
+      if (json && typeof json === 'object') {
+        const err = (json as any).error;
+        if (typeof err === 'string' && err.trim()) return err;
+        const msg = (json as any).message;
+        if (typeof msg === 'string' && msg.trim()) return msg;
+      }
+      return res.statusText || 'Request failed';
+    }
+
+    const text = await res.text().catch(() => '');
+    return text?.trim() || res.statusText || 'Request failed';
+  }
+
   /**
    * Pull incremental changes since a given timestamp (in ms).
    * Returns updated or deleted records since that time.
@@ -38,7 +57,12 @@ export class SyncClient {
     const token = await getAccessToken();
     if (!token) throw new Error('Not authenticated');
 
-    const url = `${SYNC_API_ENDPOINT}?since=${encodeURIComponent(since)}&type=${type ?? ''}&book=${book ?? ''}&meta_hash=${metaHash ?? ''}`;
+    const params = new URLSearchParams();
+    params.set('since', String(since));
+    if (type) params.set('type', type);
+    if (book) params.set('book', book);
+    if (metaHash) params.set('meta_hash', metaHash);
+    const url = `${SYNC_API_ENDPOINT}?${params.toString()}`;
     const res = await fetchWithTimeout(
       url,
       {
@@ -50,8 +74,9 @@ export class SyncClient {
     );
 
     if (!res.ok) {
-      const error = await res.json();
-      throw new Error(`Failed to pull changes: ${error.error || res.statusText}`);
+      const message = await this.readErrorMessage(res);
+      if (message === 'Not authenticated') throw new Error('Not authenticated');
+      throw new Error(`Failed to pull changes: ${message}`);
     }
 
     return res.json();
@@ -79,8 +104,9 @@ export class SyncClient {
     );
 
     if (!res.ok) {
-      const error = await res.json();
-      throw new Error(`Failed to push changes: ${error.error || res.statusText}`);
+      const message = await this.readErrorMessage(res);
+      if (message === 'Not authenticated') throw new Error('Not authenticated');
+      throw new Error(`Failed to push changes: ${message}`);
     }
 
     return res.json();

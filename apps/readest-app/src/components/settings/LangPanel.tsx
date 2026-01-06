@@ -84,8 +84,6 @@ const LangPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset 
       let label = t.label;
       if (t.authRequired && !token) {
         label = `${label} (${_('Login Required')})`;
-      } else if (t.quotaExceeded) {
-        label = `${label} (${_('Quota Exceeded')})`;
       }
       return { value: t.name, label };
     });
@@ -96,7 +94,7 @@ const LangPanel: React.FC<SettingsPanelPanelProp> = ({ bookKey, onRegisterReset 
     const value = translationProvider;
     const allProviders = getTranslationProviderOptions();
     const availableTranslators = getTranslators().filter(
-      (t) => (t.authRequired ? !!token : true) && !t.quotaExceeded,
+      (t) => (t.authRequired ? !!token : true),
     );
     const currentProvider = availableTranslators.find((t) => t.name === value)
       ? value

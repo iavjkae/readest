@@ -1,4 +1,22 @@
 services:
+  # NOTE: This compose file is intended for local development/testing.
+  # For production deployment use docker-compose.prod.yml.
+  traefik:
+    image: traefik:v3.1
+    container_name: readest-traefik
+    restart: unless-stopped
+    command:
+      - --api.dashboard=true
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+    ports:
+      - "80:80"
+      # Optional dashboard (dev only)
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
   minio:
     image: minio/minio:latest
     container_name: readest-minio
@@ -39,6 +57,11 @@ services:
       - trailbase
     ports:
       - "3000:3000"
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.readest.rule=Host(`readest.localhost`)
+      - traefik.http.routers.readest.entrypoints=web
+      - traefik.http.services.readest.loadbalancer.server.port=3000
     environment:
       # Server-side URL (used by Next.js server runtime inside the container).
       TRAILBASE_URL: "http://trailbase:4000"

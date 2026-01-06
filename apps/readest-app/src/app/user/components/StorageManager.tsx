@@ -283,22 +283,35 @@ const StorageManager = () => {
             <div>
               <div className='text-base-content/60 text-sm'>{_('Quota')}</div>
               <div className='text-base-content text-xl font-semibold'>
-                {formatFileSize(stats.quota)}
+                {typeof stats.quota === 'number' ? formatFileSize(stats.quota) : _('Unlimited')}
               </div>
             </div>
             <div>
-              <div className='text-base-content/60 text-sm'>{_('Used')}</div>
-              <div className='text-base-content text-xl font-semibold'>
-                {stats.usagePercentage}%
-              </div>
+              {typeof stats.usagePercentage === 'number' ? (
+                <>
+                  <div className='text-base-content/60 text-sm'>{_('Used')}</div>
+                  <div className='text-base-content text-xl font-semibold'>
+                    {stats.usagePercentage}%
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className='text-base-content/60 text-sm'>{_('Used')}</div>
+                  <div className='text-base-content text-xl font-semibold'>
+                    {formatFileSize(stats.totalSize)}
+                  </div>
+                </>
+              )}
             </div>
           </div>
-          <div className='bg-base-300 mt-4 h-2 w-full overflow-hidden rounded-full'>
-            <div
-              className='bg-primary h-full transition-all'
-              style={{ width: `${Math.min(stats.usagePercentage, 100)}%` }}
-            />
-          </div>
+          {typeof stats.usagePercentage === 'number' && (
+            <div className='bg-base-300 mt-4 h-2 w-full overflow-hidden rounded-full'>
+              <div
+                className='bg-primary h-full transition-all'
+                style={{ width: `${Math.min(stats.usagePercentage, 100)}%` }}
+              />
+            </div>
+          )}
         </div>
       ) : (
         <div className='bg-base-100 border-base-300 rounded-lg border p-4'>

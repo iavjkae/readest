@@ -16,7 +16,11 @@ export const getTrailbaseBaseUrl = (): string => {
     process.env['NEXT_PUBLIC_TRAILBASE_BASE_URL'] ||
     '';
 
-  const baseUrl = isServer ? serverBaseUrl : clientBaseUrl;
+  // Production-safe default: in browsers, prefer same-origin proxy so the Trailbase
+  // service does not need to be publicly exposed.
+  const defaultClientBaseUrl = '/api/trailbase';
+
+  const baseUrl = isServer ? serverBaseUrl : (clientBaseUrl || defaultClientBaseUrl);
 
   if (!baseUrl) {
     throw new Error('Trailbase base url is not configured (NEXT_PUBLIC_TRAILBASE_URL/TRAILBASE_URL)');
@@ -26,11 +30,24 @@ export const getTrailbaseBaseUrl = (): string => {
 };
 
 export const getTrailbaseJwtPublicKeyPem = (): string | null => {
-  return (
+  const direct =
     process.env['TRAILBASE_JWT_PUBLIC_KEY_PEM'] ||
     process.env['NEXT_PUBLIC_TRAILBASE_JWT_PUBLIC_KEY_PEM'] ||
-    null
-  );
+    null;
+
+  const fromFile = process.env['TRAILBASE_JWT_PUBLIC_KEY_PEM_FILE'] || null;
+  if (fromFile && typeof window === 'undefined') {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const fs = require('node:fs') as typeof import('node:fs');
+      const pem = fs.readFileSync(fromFile, 'utf8');
+      return pem && pem.trim() ? pem.trim() : direct;
+    } catch {
+      return direct;
+    }
+  }
+
+  return direct;
 };
 
 export const allowUnverifiedTrailbaseJwt = (): boolean => {

@@ -75,7 +75,6 @@ export interface AppService {
   hasUpdater: boolean;
   hasOrientationLock: boolean;
   hasScreenBrightness: boolean;
-  hasIAP: boolean;
   isMobile: boolean;
   isAppDataSandbox: boolean;
   isMobileApp: boolean;

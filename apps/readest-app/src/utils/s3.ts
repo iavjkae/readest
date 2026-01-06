@@ -8,42 +8,79 @@ import {
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
-const S3_ENDPOINT_INTERNAL = process.env['S3_ENDPOINT_INTERNAL'] || process.env['S3_ENDPOINT'] || '';
-const S3_ENDPOINT_PUBLIC = process.env['S3_ENDPOINT_PUBLIC'] || process.env['S3_ENDPOINT'] || S3_ENDPOINT_INTERNAL;
 const S3_REGION = process.env['S3_REGION'] || 'auto';
-const S3_ACCESS_KEY_ID = process.env['S3_ACCESS_KEY_ID'] || '';
-const S3_SECRET_ACCESS_KEY = process.env['S3_SECRET_ACCESS_KEY'] || '';
 
-const makeClient = (endpoint: string) =>
-  new S3Client({
-    forcePathStyle: true,
+const getEndpointInternal = (): string | undefined => {
+  const v = process.env['S3_ENDPOINT_INTERNAL'] || process.env['S3_ENDPOINT'];
+  return v && v.trim() ? v.trim() : undefined;
+};
+
+const getEndpointPublic = (): string | undefined => {
+  const v = process.env['S3_ENDPOINT_PUBLIC'] || process.env['S3_ENDPOINT'];
+  return v && v.trim() ? v.trim() : undefined;
+};
+
+const getCredentials = () => {
+  const accessKeyId = process.env['S3_ACCESS_KEY_ID'];
+  const secretAccessKey = process.env['S3_SECRET_ACCESS_KEY'];
+
+  if (!accessKeyId || !secretAccessKey) {
+    throw new Error('S3 credentials are not configured (S3_ACCESS_KEY_ID/S3_SECRET_ACCESS_KEY)');
+  }
+
+  return { accessKeyId, secretAccessKey };
+};
+
+const shouldForcePathStyle = (endpoint?: string): boolean => {
+  // Default to path-style when a custom endpoint is provided (MinIO/R2/etc).
+  // Allow overriding explicitly.
+  const override = process.env['S3_FORCE_PATH_STYLE'];
+  if (override === 'true') return true;
+  if (override === 'false') return false;
+  return Boolean(endpoint);
+};
+
+const makeClient = (endpoint?: string) => {
+  const credentials = getCredentials();
+  return new S3Client({
     region: S3_REGION,
-    endpoint,
-    credentials: {
-      accessKeyId: S3_ACCESS_KEY_ID,
-      secretAccessKey: S3_SECRET_ACCESS_KEY,
-    },
+    ...(endpoint ? { endpoint } : {}),
+    forcePathStyle: shouldForcePathStyle(endpoint),
+    credentials,
   });
+};
 
-// Used only for signing URLs returned to browsers.
-export const s3PublicClient = makeClient(S3_ENDPOINT_PUBLIC);
+let cachedInternalClient: S3Client | null = null;
+let cachedPublicClient: S3Client | null = null;
 
-// Used for server-side operations (bucket checks/deletes).
-export const s3InternalClient = makeClient(S3_ENDPOINT_INTERNAL);
+const getInternalClient = (): S3Client => {
+  if (!cachedInternalClient) {
+    cachedInternalClient = makeClient(getEndpointInternal());
+  }
+  return cachedInternalClient;
+};
+
+const getPublicClient = (): S3Client => {
+  if (!cachedPublicClient) {
+    // If public endpoint is not set, fall back to internal.
+    cachedPublicClient = makeClient(getEndpointPublic() ?? getEndpointInternal());
+  }
+  return cachedPublicClient;
+};
 
 
 export const s3Storage = {
   getClient: () => {
-    return s3InternalClient;
+    return getInternalClient();
   },
 
   ensureBucket: async (bucketName: string) => {
     if (!bucketName) return;
     try {
-      await s3InternalClient.send(new HeadBucketCommand({ Bucket: bucketName }));
+      await getInternalClient().send(new HeadBucketCommand({ Bucket: bucketName }));
     } catch {
       try {
-        await s3InternalClient.send(new CreateBucketCommand({ Bucket: bucketName }));
+        await getInternalClient().send(new CreateBucketCommand({ Bucket: bucketName }));
       } catch {
         // best-effort
       }
@@ -61,7 +98,7 @@ export const s3Storage = {
       Bucket: bucketName,
       Key: fileKey,
     });
-    const downloadUrl = await getSignedUrl(s3PublicClient, getCommand, {
+    const downloadUrl = await getSignedUrl(getPublicClient(), getCommand, {
       expiresIn: expiresIn,
     });
     return downloadUrl;
@@ -84,12 +121,12 @@ export const s3Storage = {
       ContentLength: contentLength,
     });
 
-    const uploadUrl = await getSignedUrl(s3PublicClient, putCommand, {
+    const uploadUrlSigned = await getSignedUrl(getPublicClient(), putCommand, {
       expiresIn: expiresIn,
       signableHeaders,
     });
 
-    return uploadUrl;
+    return uploadUrlSigned;
   },
 
   deleteObject: async (bucketName: string, fileKey: string) => {
@@ -99,6 +136,6 @@ export const s3Storage = {
     });
 
     await s3Storage.ensureBucket(bucketName);
-    return await s3InternalClient.send(deleteCommand);
+    return await getInternalClient().send(deleteCommand);
   },
 };

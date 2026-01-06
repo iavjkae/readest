@@ -1,37 +1,23 @@
 import { NextResponse } from 'next/server';
-
-const getTrailbaseUrl = () => {
-  const baseUrl = process.env['TRAILBASE_URL'] || process.env['NEXT_PUBLIC_TRAILBASE_URL'];
-  if (!baseUrl) {
-    throw new Error('TRAILBASE_URL (or NEXT_PUBLIC_TRAILBASE_URL) is not configured');
-  }
-  return baseUrl.replace(/\/$/, '');
-};
+import { trailbaseFetch } from '@/services/backend/trailbaseRecords';
 
 export const trailbaseProxy = async (
   path: string,
   init: RequestInit,
 ): Promise<{ ok: boolean; status: number; json?: unknown; text?: string }> => {
-  const url = `${getTrailbaseUrl()}${path.startsWith('/') ? '' : '/'}${path}`;
-
-  const res = await fetch(url, {
+  const res = await trailbaseFetch(path, {
     ...init,
     headers: {
       'Content-Type': 'application/json',
       ...(init.headers || {}),
     },
-    // ensure no caching of auth responses
-    cache: 'no-store',
   });
 
-  const contentType = res.headers.get('content-type') || '';
-  if (contentType.includes('application/json')) {
-    const json = await res.json().catch(() => null);
-    return { ok: res.ok, status: res.status, json };
-  }
+  if (res.ok) return { ok: true, status: res.status, json: res.json };
 
-  const text = await res.text().catch(() => '');
-  return { ok: res.ok, status: res.status, text };
+  const body = res.error.body;
+  if (typeof body === 'string') return { ok: false, status: res.status, text: body };
+  return { ok: false, status: res.status, json: body };
 };
 
 export const jsonError = (message: string, status = 500) => {

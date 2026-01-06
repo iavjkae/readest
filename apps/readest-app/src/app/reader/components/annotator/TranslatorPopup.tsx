@@ -72,7 +72,7 @@ const TranslatorPopup: React.FC<TranslatorPopupProps> = ({
   const handleProviderChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
     const requestedProvider = event.target.value;
     const availableTranslators = getTranslators().filter(
-      (t) => (t.authRequired ? !!token : true) && !t.quotaExceeded,
+      (t) => (t.authRequired ? !!token : true),
     );
     const selectedTranslator =
       availableTranslators.find((t) => t.name === requestedProvider) || availableTranslators[0]!;
@@ -88,8 +88,6 @@ const TranslatorPopup: React.FC<TranslatorPopupProps> = ({
       let label = t.label;
       if (t.authRequired && !token) {
         label = `${label} (${_('Login Required')})`;
-      } else if (t.quotaExceeded) {
-        label = `${label} (${_('Quota Exceeded')})`;
       }
       return { name: t.name, label };
     });

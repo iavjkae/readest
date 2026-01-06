@@ -65,14 +65,15 @@ const mergeDedupe = <T extends Record<string, unknown>>(
 export async function GET(req: NextRequest) {
   const { user, token } = await validateUserAndToken(req.headers.get('authorization'));
   if (!user || !token) {
-    return NextResponse.json({ error: 'Not authenticated' }, { status: 403 });
+    return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
   }
 
   const { searchParams } = new URL(req.url);
   const sinceParam = searchParams.get('since');
   const typeParam = searchParams.get('type') as SyncType | undefined;
-  const bookParam = searchParams.get('book');
-  const metaHashParam = searchParams.get('meta_hash');
+  const bookParam =
+    searchParams.get('book') ?? searchParams.get('book_hash') ?? searchParams.get('bookHash');
+  const metaHashParam = searchParams.get('meta_hash') ?? searchParams.get('metaHash');
 
   if (!sinceParam) {
     return NextResponse.json({ error: '"since" query parameter is required' }, { status: 400 });
@@ -145,13 +146,25 @@ export async function GET(req: NextRequest) {
     };
 
     if (!typeParam || typeParam === 'books') {
-      await queryTables('books').catch((err) => (errors['books'] = err));
+      await queryTables('books').catch((err: unknown) => {
+        errors['books'] = { table: 'books', error: err instanceof Error ? err : new Error(String(err)) };
+      });
     }
     if (!typeParam || typeParam === 'configs') {
-      await queryTables('book_configs').catch((err) => (errors['book_configs'] = err));
+      await queryTables('book_configs').catch((err: unknown) => {
+        errors['book_configs'] = {
+          table: 'book_configs',
+          error: err instanceof Error ? err : new Error(String(err)),
+        };
+      });
     }
     if (!typeParam || typeParam === 'notes') {
-      await queryTables('book_notes', ['note_id']).catch((err) => (errors['book_notes'] = err));
+      await queryTables('book_notes', ['note_id']).catch((err: unknown) => {
+        errors['book_notes'] = {
+          table: 'book_notes',
+          error: err instanceof Error ? err : new Error(String(err)),
+        };
+      });
     }
 
     const dbErrors = Object.values(errors).filter((err) => err !== null);
@@ -178,10 +191,14 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   const { user, token } = await validateUserAndToken(req.headers.get('authorization'));
   if (!user || !token) {
-    return NextResponse.json({ error: 'Not authenticated' }, { status: 403 });
+    return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
   }
   const body = await req.json();
-  const { books = [], configs = [], notes = [] } = body as SyncData;
+  const {
+    books = [],
+    configs = (body as any)?.book_configs ?? [],
+    notes = (body as any)?.book_notes ?? [],
+  } = body as SyncData;
 
   const BATCH_SIZE = 100;
   const upsertRecords = async (
